@@ -7,7 +7,7 @@ DB_PATH = "bot.db"
 # the catalogue the bot starts with; see the Economy section at the bottom
 STARTING_ITEM_CODE = "1x6"
 STARTING_ITEM_NAME = "1 игра в 1x6"
-STARTING_ITEM_DESCRIPTION = "Одна игра в формате 1x6"
+STARTING_ITEM_DESCRIPTION = "Одна игра в кастомку 1x6"
 STARTING_ITEM_PRICE = 10
 
 
