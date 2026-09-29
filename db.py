@@ -48,6 +48,15 @@ async def init_db():
                 price INTEGER, purchased_at REAL,
                 status TEXT DEFAULT 'pending'
             )""")
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS reaction_roles (
+                guild_id INTEGER, channel_id INTEGER, message_id INTEGER,
+                emoji TEXT, role_id INTEGER, created_by INTEGER,
+                created_at REAL,
+                PRIMARY KEY (message_id, emoji)
+            )""")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_reaction_roles_guild"
+                         " ON reaction_roles (guild_id)")
         # seeding by the unique code keeps this idempotent and never
         # overwrites a price that was changed later
         await db.execute(
@@ -312,3 +321,80 @@ async def set_purchase_status(purchase_id, status):
             (status, purchase_id))
         await db.commit()
         return cursor.rowcount > 0
+
+
+# --------------------------------------------------------------------------
+# Reaction roles
+# --------------------------------------------------------------------------
+
+async def add_reaction_role(guild_id, channel_id, message_id, emoji, role_id,
+                            created_by=None):
+    """Map `emoji` of `message_id` to `role_id`, replacing an old mapping."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT OR REPLACE INTO reaction_roles
+               (guild_id, channel_id, message_id, emoji, role_id, created_by,
+                created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (guild_id, channel_id, message_id, emoji, role_id, created_by,
+             time.time()))
+        await db.commit()
+
+
+async def get_reaction_role(message_id, emoji):
+    """Mapping of one emoji on one message, None when there is none."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM reaction_roles WHERE message_id=? AND emoji=?",
+            (message_id, emoji)) as cur:
+            return await cur.fetchone()
+
+
+async def get_reaction_menu(message_id):
+    """Every mapping of one message, ordered by emoji."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM reaction_roles WHERE message_id=? ORDER BY emoji",
+            (message_id,)) as cur:
+            return await cur.fetchall()
+
+
+async def get_reaction_menus(guild_id):
+    """Every mapping of a guild, grouped menu by menu."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM reaction_roles WHERE guild_id=?"
+            " ORDER BY message_id ASC, emoji ASC", (guild_id,)) as cur:
+            return await cur.fetchall()
+
+
+async def delete_reaction_role(message_id, emoji):
+    """Unmap one emoji. True when a mapping was removed."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "DELETE FROM reaction_roles WHERE message_id=? AND emoji=?",
+            (message_id, emoji))
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def delete_reaction_menu(message_id):
+    """Unmap a whole message, returns how many mappings were dropped."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "DELETE FROM reaction_roles WHERE message_id=?", (message_id,))
+        await db.commit()
+        return cursor.rowcount
+
+
+async def delete_reaction_roles_for_role(guild_id, role_id):
+    """Drop the mappings of a role that is gone, returns how many."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "DELETE FROM reaction_roles WHERE guild_id=? AND role_id=?",
+            (guild_id, role_id))
+        await db.commit()
+        return cursor.rowcount

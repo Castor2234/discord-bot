@@ -7,7 +7,7 @@ from db import init_db
 load_dotenv()
 token = os.getenv('DISCORD_TOKEN')
 
-COGS = ("cogs.levels", "cogs.economy")
+COGS = ("cogs.levels", "cogs.economy", "cogs.roles")
 
 handler = logging.FileHandler(filename='discordbot.log', encoding='utf-8', mode='a')
 

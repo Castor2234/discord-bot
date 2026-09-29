@@ -25,7 +25,7 @@ from db import (
 )
 
 # ------------------------------------------------------------------ settings
-CURRENCY_NAME = "coins"                  # shown as "🪙 10 coins"
+CURRENCY_NAME = "танго"                  
 SHOP_LOG_CHANNEL_ID: int | None = None   # staff channel for new orders
 DAILY_ENABLED = True
 DAILY_AMOUNT = 100
