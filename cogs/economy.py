@@ -25,36 +25,36 @@ from db import (
 )
 
 # ------------------------------------------------------------------ settings
-CURRENCY_NAME = "танго"                  
+CURRENCY_NAME = "манго <:dota_mango:1554514974121009152>"                  
 SHOP_LOG_CHANNEL_ID: int | None = None   # staff channel for new orders
 DAILY_ENABLED = True
-DAILY_AMOUNT = 100
+DAILY_AMOUNT = 5
 DAILY_INTERVAL = 24 * 3600               # seconds between two claims
 PENDING_STATUS = "pending"
 DELIVERED_STATUS = "delivered"
 
 # user facing texts
-BALANCE_MESSAGE = "{mention} has **{balance}** {currency}."
-SHOP_TITLE = "🛒 Shop"
-SHOP_EMPTY = "The shop is empty right now."
+BALANCE_MESSAGE = "Баланс пользователя {mention}: **{balance}** {currency}."
+SHOP_TITLE = "🛒 Магазин"
+SHOP_EMPTY = "Магазин пуст."
 SHOP_FOOTER = "Buy with `{prefix}shop buy <code>`."
 SHOP_LINE = "**{name}** — 🪙 {price} (`{code}`)\n{description}"
 PURCHASE_MESSAGE = ("🛒 You bought **{name}** for 🪙 {price}. "
                     "Balance: 🪙 {balance}. Order **#{order_id}**.")
 PURCHASE_LOG = ("🛒 {mention} bought **{name}** for 🪙 {price} - "
                 "order **#{order_id}** ({status})")
-INSUFFICIENT_FUNDS = "You need **{missing}** more {currency} (price: 🪙 {price})."
-ITEM_NOT_FOUND = "There is no shop item called `{query}`. Available: {available}"
-ORDERS_TITLE = "🧾 Recent orders"
-ORDERS_EMPTY = "No orders yet."
+INSUFFICIENT_FUNDS = "Не хватает еще **{missing}** {currency} (цена: {price})."
+ITEM_NOT_FOUND = "В магазине нет товара `{query}`. Доступные товары: {available}"
+ORDERS_TITLE = "🧾 Последние заказы"
+ORDERS_EMPTY = "Нет заказов."
 ORDER_LINE = "**#{order_id}** {mention} — {name}, 🪙 {price}, `{status}`, {when}"
-ORDER_UPDATED = "Order **#{order_id}** is now `{status}`."
-ORDER_NOT_FOUND = "There is no order **#{order_id}**."
-DAILY_CLAIMED = "🪙 You claimed your daily **{amount}** {currency}. Balance: 🪙 {balance}."
-DAILY_WAITING = "You already claimed your daily reward. Come back in **{hours}h {minutes}m**."
-DAILY_DISABLED = "The daily reward is disabled."
-PERMISSION_ERROR = "You need the **Manage Server** permission to use this command."
-MEMBER_NOT_FOUND_ERROR = "I could not find that member."
+ORDER_UPDATED = "Заказ **#{order_id}** теперь `{status}`."
+ORDER_NOT_FOUND = "Заказа **#{order_id}** не существует."
+DAILY_CLAIMED = "<:pudge:1554517617434296320> Ежедневная награда получена: **{amount}** {currency}. Баланс: **{balance}** {currency}."
+DAILY_WAITING = "Вы уже забрали ежедневную награду. Вернитесь спустя **{hours}ч {minutes}м**."
+DAILY_DISABLED = "Ежедневная награда отключена."
+PERMISSION_ERROR = "У тебя нет **Manage Server** прав для использования этой команды."
+MEMBER_NOT_FOUND_ERROR = "Не нашел такого пользователя."
 DATE_FORMAT = "%Y-%m-%d %H:%M"
 
 

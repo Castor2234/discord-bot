@@ -30,7 +30,7 @@ XP_MAX = 25
 XP_COOLDOWN = 60             # seconds between two XP gains for the same user
 LEVEL_UP_COINS_PER_LEVEL = 1  # coins paid per level reached (0 = no reward)
 IGNORED_CHANNEL_IDS: set[int] = set()   # e.g. {123456789} to mute XP in #spam
-IGNORED_ROLE_IDS: set[int] = set()      # e.g. {123456789} to skip a muted role
+IGNORED_ROLE_IDS: set[int] = set({866824826077446204})      # e.g. {123456789} to skip a muted role
 
 # voice XP: sitting in a voice channel pays out once per interval
 VOICE_XP_ENABLED = True
@@ -43,22 +43,22 @@ VOICE_XP_IGNORE_AFK_CHANNEL = True
 
 # channel for level ups that did not happen in a text channel (voice XP);
 # falls back to guild.system_channel while this stays None
-LEVEL_UP_CHANNEL_ID: int | None = None
+LEVEL_UP_CHANNEL_ID: int | None = 863349874505678850
 
 # user facing texts
-LEVEL_UP_MESSAGE = "🎉 {mention} reached **level {level}**!"
-LEVEL_UP_REWARD_MESSAGE = "💰 +{coins} coins"
-LEADERBOARD_TITLE = "🏆 {guild} leaderboard"
-EMPTY_LEADERBOARD = "Nobody earned XP here yet - start chatting!"
-PERMISSION_ERROR = "You need the **Manage Server** permission to use this command."
-MEMBER_NOT_FOUND_ERROR = "I could not find that member."
+LEVEL_UP_MESSAGE = "🎉 {mention} теперь имеет **{level}** уровень!"
+LEVEL_UP_REWARD_MESSAGE = "+{coins} манго <:dota_mango:1554514974121009152>"
+LEADERBOARD_TITLE = "🏆 Таблица лидеров {guild} "
+EMPTY_LEADERBOARD = "Таблица лидеров пока пуста"
+PERMISSION_ERROR = "Необходимы **Manage Server** права для использования этой команды."
+MEMBER_NOT_FOUND_ERROR = "Не смог найти такого пользователя."
 MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
 
 
 # --------------------------------------------------------- level curve maths
 def xp_to_next_level(level: int) -> int:
     """XP that has to be earned inside `level` to reach `level` + 1."""
-    return 5 * level * level + 50 * level + 100
+    return 2 * level * level + 50 * level + 100
 
 
 def total_xp_for_level(level: int) -> int:
