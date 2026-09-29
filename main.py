@@ -2,10 +2,12 @@ import os, discord
 from discord.ext import commands
 from dotenv import load_dotenv
 import logging
-from db.py import init_db
+from db import init_db
 
 load_dotenv()
 token = os.getenv('DISCORD_TOKEN')
+
+COGS = ("cogs.levels", "cogs.economy")
 
 handler = logging.FileHandler(filename='discordbot.log', encoding='utf-8', mode='a')
 
@@ -15,20 +17,23 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-admin_role = "Главный"
-guild = discord.Object("1554266264149696573")
+guild = discord.Object(id=1554266264149696573)
 
 @bot.event
 async def setup_hook():
     await init_db()
-    await bot.load_extension("cogs.levels")
+    for cog in COGS:
+        try:
+            await bot.load_extension(cog)
+        except Exception as error:  # a broken cog must not take the whole bot down
+            print(f"Cog {cog} failed to load: {error!r}")
     #await bot.tree.sync()
     bot.tree.copy_global_to(guild=guild)
     await bot.tree.sync(guild=guild)
 
 @bot.event
 async def on_ready():
-    print(f"We are ready {bot.user.name}")
+    print(f"{bot.user.name} готов")
 
 @bot.event
 async def on_message(message):
@@ -40,18 +45,13 @@ async def on_message(message):
     await bot.process_commands(message)
 
 @bot.command()
-async def hello(ctx):
-    await ctx.send(f"Hello {ctx.author.mention}")
-
-
-@bot.command()
-@commands.has_permissions(administator = True)
+@commands.has_permissions(administrator = True)
 async def admin(ctx):
     await ctx.send(f"Hello admin {ctx.author.mention}")
 
 @admin.error
 async def admin_error(ctx,error):
-    if isinstance(error,commands.MissingRole):
+    if isinstance(error,commands.MissingPermissions):
         await ctx.send("You do not have admin permissions")
 
 
