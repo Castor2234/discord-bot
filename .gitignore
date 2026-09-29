@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local SQLite state of the bot (xp, balances, reaction role menus) holds user
+# data and must never be committed
+*.db

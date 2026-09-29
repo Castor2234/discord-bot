@@ -10,6 +10,8 @@ use `rolemenu take`.
 """
 
 import logging
+import re
+from typing import Optional
 
 import discord
 from discord import app_commands
@@ -62,7 +64,21 @@ MENU_LIST_MORE = "\u2026 and **{count}** more menu(s), use `show` for one of the
 MENU_MISSING_ROLE = "(deleted role)"
 MENU_FULL = "One message can map at most **{limit}** emoji."
 
-MESSAGE_NOT_FOUND = "I cannot find message **{message_id}** in <#{channel_id}>."
+MESSAGE_NOT_FOUND = "I cannot find message **{message_id}** in <#{channel_id}>. " \
+                    "Right click the message \u2192 *Copy Message Link* and paste " \
+                    "that link instead, a bare ID only works inside the channel " \
+                    "you pick."
+MESSAGE_REF_INVALID = "I cannot read `{text}` as a message. Paste the message " \
+                      "link (right click the message \u2192 *Copy Message Link*) " \
+                      "or its bare ID."
+MESSAGE_CHANNEL_MISSING = "A bare message ID needs the `channel` argument. The " \
+                         "easy way round it is pasting the message link instead, " \
+                         "it already carries the channel."
+MESSAGE_CHANNEL_MISMATCH = "That message link points at <#{link_channel}> while " \
+                          "the `channel` argument says <#{picked_channel}> - keep " \
+                          "only one of them."
+MESSAGE_CHANNEL_UNREADABLE = "<#{channel_id}> is gone, or I cannot read messages " \
+                            "there (I need View Channel and Read Message History)."
 CHANNEL_NO_ACCESS = "I cannot read <#{channel_id}> - I need View Channel and " \
                     "Read Message History there."
 BOT_MISSING_PERMISSIONS = "I am missing {perms} in <#{channel_id}> for that menu."
@@ -141,6 +157,18 @@ def parse_emoji(text: str) -> discord.PartialEmoji | None:
     return emoji or None
 
 
+def guild_emoji_by_name(guild: discord.Guild, text: str):
+    """Resolve a `name` / `:name:` shortcut against the custom emoji of `guild`.
+
+    Staff copy the shortcut from the emoji picker of their own server, so this
+    only ever reaches for an emoji this server actually owns.
+    """
+    name = (text or "").strip().strip(":")
+    if not name or ":" in name or "<" in name:
+        return None
+    return discord.utils.get(guild.emojis, name=name)
+
+
 def http_reason(error: BaseException) -> str:
     """Short human readable reason taken from a failed REST call."""
     return getattr(error, "text", None) or str(error) or type(error).__name__
@@ -148,6 +176,37 @@ def http_reason(error: BaseException) -> str:
 
 class RoleSetupError(commands.CommandError):
     """Raised when a menu cannot be built or a role cannot be handed out."""
+
+
+# ------------------------------------------------------------- message targets
+SNOWFLAKE = r"\d{15,25}"
+# `guild/channel/message` of a message link, `@me` allowed in place of the
+# guild and the extra `-` segment Discord uses in a "newest message" link
+MESSAGE_LINK = re.compile(
+    rf"(?:{SNOWFLAKE}|@me)/({SNOWFLAKE})(?:/-)?/({SNOWFLAKE})")
+
+
+_USER_MENTION = re.compile(rf"^<@!?({SNOWFLAKE})>$")
+
+
+def parse_message_ref(text: str) -> tuple[int | None, int]:
+    """Split what staff pasted into ``(channel id or None, message id)``.
+
+    A bare message ID carries no channel, every Discord message link does, so
+    the link is the form that cannot point at the wrong place. A number typed
+    as an argument reaches us untouched, but a number that happens to be a user
+    ID is autolinked into a `<@id>` mention, which is unwrapped here. A channel
+    mention is deliberately *not* accepted: it looks like an ID and is not one.
+    """
+    text = (text or "").strip()
+    mention = _USER_MENTION.match(text)
+    text = mention.group(1) if mention else text.strip("`\"'.,;")
+    if text.isdigit():
+        return None, int(text)
+    match = MESSAGE_LINK.search(text)
+    if match:
+        return int(match.group(1)), int(match.group(2))
+    raise RoleSetupError(MESSAGE_REF_INVALID.format(text=text or "<empty>"))
 
 
 class Roles(commands.Cog):
@@ -166,9 +225,12 @@ class Roles(commands.Cog):
 
     async def grant_role(self, payload) -> None:
         """Assign the role behind this reaction, ignoring anything unusable."""
-        guild = payload.guild
-        if guild is None or self.bot.user is None:
+        if self.bot.user is None or payload.guild_id is None:
             return  # a reaction in DMs can never map to a guild role
+        # a raw reaction event only carries the guild id, never the object
+        guild = self.bot.get_guild(payload.guild_id)
+        if guild is None:
+            return
         if payload.user_id == self.bot.user.id:
             return  # the reaction we added ourselves while building the menu
         key = reaction_key(payload.emoji)
@@ -264,7 +326,7 @@ class Roles(commands.Cog):
             raise RoleSetupError(ROLE_TOO_HIGH_STAFF.format(role=role.name))
 
     @staticmethod
-    def missing_permissions(channel: discord.TextChannel) -> list[str]:
+    def missing_permissions(channel: Messageable) -> list[str]:
         """What the bot lacks in `channel` for a working menu."""
         perms = channel.permissions_for(channel.guild.me)
         missing = []
@@ -279,7 +341,7 @@ class Roles(commands.Cog):
         return missing
 
     @staticmethod
-    async def fetch_message(channel: discord.TextChannel,
+    async def fetch_message(channel: Messageable,
                             message_id: int) -> discord.Message:
         """The menu message, with a readable error instead of a raw 404."""
         try:
@@ -290,6 +352,35 @@ class Roles(commands.Cog):
         except discord.Forbidden as error:
             raise RoleSetupError(CHANNEL_NO_ACCESS.format(
                 channel_id=channel.id)) from error
+
+    async def resolve_target(self, guild: discord.Guild, message: str,
+                             channel: Optional[discord.TextChannel]
+                             ) -> tuple[Messageable, int]:
+        """The ``(channel, message id)`` a menu should be built on.
+
+        A message link brings its own channel and works for threads too, a
+        bare message ID can only be read together with the `channel` argument.
+        """
+        link_channel_id, message_id = parse_message_ref(message)
+        if channel is not None:
+            if link_channel_id is not None and link_channel_id != channel.id:
+                raise RoleSetupError(MESSAGE_CHANNEL_MISMATCH.format(
+                    link_channel=link_channel_id, picked_channel=channel.id))
+            return channel, message_id
+        if link_channel_id is None:
+            raise RoleSetupError(MESSAGE_CHANNEL_MISSING)
+        target = guild.get_channel(link_channel_id) or guild.get_thread(
+            link_channel_id)
+        if target is None:
+            try:
+                target = await guild.fetch_channel(link_channel_id)
+            except discord.HTTPException as error:
+                raise RoleSetupError(MESSAGE_CHANNEL_UNREADABLE.format(
+                    channel_id=link_channel_id)) from error
+        if not isinstance(target, Messageable):
+            raise RoleSetupError(MESSAGE_CHANNEL_UNREADABLE.format(
+                channel_id=link_channel_id))
+        return target, message_id
 
     @staticmethod
     def menu_url(row) -> str:
@@ -312,44 +403,45 @@ class Roles(commands.Cog):
     @commands.guild_only()
     @commands.has_permissions(manage_guild=True)
     @app_commands.describe(
-        channel="Channel that holds the menu message",
-        message_id="ID of the message members react to",
+        message="Message link (the safe one) or the message ID",
         emoji="Emoji to react with, e.g. \u2705 or <:name:id>",
         role="Role that this reaction grants",
+        channel="Channel of that message, only needed for a bare ID",
     )
-    async def rolemenu_add(self, ctx: commands.Context,
-                           channel: discord.TextChannel, message_id: int,
-                           emoji: str, role: discord.Role) -> None:
-        """Map `emoji` on `message_id` to `role` and react with it."""
+    async def rolemenu_add(self, ctx: commands.Context, message: str,
+                           emoji: str, role: discord.Role,
+                           channel: Optional[discord.TextChannel] = None) -> None:
+        """Map `emoji` on `message` to `role` and react with it."""
         guild = ctx.guild
-        parsed = parse_emoji(emoji)
+        target, message_id = await self.resolve_target(guild, message, channel)
+        parsed = parse_emoji(emoji) or guild_emoji_by_name(guild, emoji)
         if parsed is None:
             raise RoleSetupError(EMOJI_INVALID.format(emoji=emoji))
         key = reaction_key(parsed)
         self.check_role(ctx, role)
 
-        missing = self.missing_permissions(channel)
+        missing = self.missing_permissions(target)
         if missing:
             raise RoleSetupError(BOT_MISSING_PERMISSIONS.format(
-                channel_id=channel.id, perms=", ".join(missing)))
-        message = await self.fetch_message(channel, message_id)
+                channel_id=target.id, perms=", ".join(missing)))
+        menu_message = await self.fetch_message(target, message_id)
 
         menu = await get_reaction_menu(message_id)
         old = next((row for row in menu if row["emoji"] == key), None)
         if old is None and len(menu) >= MAX_OPTIONS_PER_MENU:
             raise RoleSetupError(MENU_FULL.format(limit=MAX_OPTIONS_PER_MENU))
 
-        await add_reaction_role(guild.id, channel.id, message_id, key, role.id,
+        await add_reaction_role(guild.id, target.id, message_id, key, role.id,
                                 ctx.author.id)
         try:
-            await message.add_reaction(emoji_from_key(key))
+            await menu_message.add_reaction(emoji_from_key(key))
         except discord.HTTPException as error:
             # a mapping nobody can click would just hide a broken menu
             await delete_reaction_role(message_id, key)
             raise RoleSetupError(REACTION_FAILED.format(
                 emoji=render_key(key), reason=http_reason(error))) from error
 
-        url = JUMP_URL.format(guild_id=guild.id, channel_id=channel.id,
+        url = JUMP_URL.format(guild_id=guild.id, channel_id=target.id,
                               message_id=message_id)
         if old is None:
             await ctx.send(MENU_ADDED.format(emoji=render_key(key), url=url,
@@ -364,12 +456,13 @@ class Roles(commands.Cog):
                       description="Unmap a single emoji of a message")
     @commands.guild_only()
     @commands.has_permissions(manage_guild=True)
-    @app_commands.describe(message_id="ID of the menu message",
+    @app_commands.describe(message="Message link or message ID",
                            emoji="Emoji that should stop granting a role")
-    async def rolemenu_remove(self, ctx: commands.Context, message_id: int,
+    async def rolemenu_remove(self, ctx: commands.Context, message: str,
                               emoji: str) -> None:
-        """Stop mapping `emoji` of `message_id` to a role."""
-        parsed = parse_emoji(emoji)
+        """Stop mapping `emoji` of `message` to a role."""
+        message_id = parse_message_ref(message)[1]
+        parsed = parse_emoji(emoji) or guild_emoji_by_name(ctx.guild, emoji)
         if parsed is None:
             raise RoleSetupError(EMOJI_INVALID.format(emoji=emoji))
         key = reaction_key(parsed)
@@ -387,10 +480,11 @@ class Roles(commands.Cog):
                       description="Unmap a whole menu message")
     @commands.guild_only()
     @commands.has_permissions(manage_guild=True)
-    @app_commands.describe(message_id="ID of the menu message")
+    @app_commands.describe(message="Message link or message ID")
     async def rolemenu_clear(self, ctx: commands.Context,
-                             message_id: int) -> None:
-        """Drop every mapping of `message_id`, the reactions stay untouched."""
+                             message: str) -> None:
+        """Drop every mapping of `message`, the reactions stay untouched."""
+        message_id = parse_message_ref(message)[1]
         menu = await get_reaction_menu(message_id)
         if not menu or menu[0]["guild_id"] != ctx.guild.id:
             await ctx.send(MENU_EMPTY, ephemeral=True)
@@ -403,11 +497,12 @@ class Roles(commands.Cog):
                       description="Show the mapping of one menu message")
     @commands.guild_only()
     @commands.has_permissions(manage_guild=True)
-    @app_commands.describe(message_id="ID of the menu message")
+    @app_commands.describe(message="Message link or message ID")
     async def rolemenu_show(self, ctx: commands.Context,
-                            message_id: int) -> None:
-        """List every emoji of `message_id` and the role behind it."""
+                            message: str) -> None:
+        """List every emoji of `message` and the role behind it."""
         guild = ctx.guild
+        message_id = parse_message_ref(message)[1]
         menu = await get_reaction_menu(message_id)
         if not menu or menu[0]["guild_id"] != guild.id:
             await ctx.send(MENU_EMPTY, ephemeral=True)
