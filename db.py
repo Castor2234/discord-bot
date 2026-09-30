@@ -57,6 +57,23 @@ async def init_db():
             )""")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_reaction_roles_guild"
                          " ON reaction_roles (guild_id)")
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS guild_settings (
+                guild_id INTEGER PRIMARY KEY,
+                level_up_channel_id INTEGER,
+                level_up_everywhere INTEGER NOT NULL DEFAULT 0,
+                updated_at REAL
+            )""")
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS ignored_channels (
+                guild_id INTEGER NOT NULL, channel_id INTEGER NOT NULL,
+                PRIMARY KEY (guild_id, channel_id)
+            )""")
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS ignored_roles (
+                guild_id INTEGER NOT NULL, role_id INTEGER NOT NULL,
+                PRIMARY KEY (guild_id, role_id)
+            )""")
         # seeding by the unique code keeps this idempotent and never
         # overwrites a price that was changed later
         await db.execute(
@@ -398,3 +415,149 @@ async def delete_reaction_roles_for_role(guild_id, role_id):
             (guild_id, role_id))
         await db.commit()
         return cursor.rowcount
+
+
+# --------------------------------------------------------------------------
+# Guild level settings
+#
+# One guild_settings row per server holds the level up channel, the two
+# ignored_* tables hold the sets that mute XP. Everything is stored per server,
+# so a second server the bot joins starts with a clean slate.
+# --------------------------------------------------------------------------
+
+async def ensure_guild_settings(guild_id, level_up_channel_id=None,
+                                ignored_role_ids=(), ignored_channel_ids=()):
+    """Give a server its starting settings, once, and never touch them again.
+
+    A server that never appears in `guild_settings` has never been configured,
+    so the first read seeds the built-in defaults for it. A server that does
+    have a row owns its settings: an empty ignore table then means "cleared on
+    purpose" and the defaults must not creep back in.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT 1 FROM guild_settings WHERE guild_id=?",
+            (guild_id,)) as cur:
+            known = await cur.fetchone() is not None
+        if known:
+            return
+        await db.execute(
+            """INSERT INTO guild_settings
+               (guild_id, level_up_channel_id, level_up_everywhere, updated_at)
+               VALUES (?, ?, 0, ?)""",
+            (guild_id, level_up_channel_id, time.time()))
+        for role_id in ignored_role_ids:
+            await db.execute(
+                "INSERT OR IGNORE INTO ignored_roles (guild_id, role_id)"
+                " VALUES (?, ?)", (guild_id, role_id))
+        for channel_id in ignored_channel_ids:
+            await db.execute(
+                "INSERT OR IGNORE INTO ignored_channels (guild_id, channel_id)"
+                " VALUES (?, ?)", (guild_id, channel_id))
+        await db.commit()
+
+
+async def get_guild_settings(guild_id):
+    """The settings row of a server, None while the server has nothing stored."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM guild_settings WHERE guild_id=?",
+            (guild_id,)) as cur:
+            return await cur.fetchone()
+
+
+async def set_level_up_channel(guild_id, channel_id, everywhere=False):
+    """Send level up messages to `channel_id`, None resets to no channel.
+
+    `everywhere` (move the level ups earned in chat there too) only means
+    something while a channel is set, so it is dropped with the channel.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO guild_settings
+               (guild_id, level_up_channel_id, level_up_everywhere, updated_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT (guild_id) DO UPDATE
+               SET level_up_channel_id = excluded.level_up_channel_id,
+                   level_up_everywhere = excluded.level_up_everywhere,
+                   updated_at = excluded.updated_at""",
+            (guild_id, channel_id,
+             int(bool(channel_id is not None and everywhere)), time.time()))
+        await db.commit()
+
+
+async def clear_level_up_channel(guild_id, channel_id):
+    """Forget a level up channel that was deleted. True when it was set."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            """UPDATE guild_settings
+               SET level_up_channel_id = NULL, level_up_everywhere = 0,
+                   updated_at = ?
+               WHERE guild_id=? AND level_up_channel_id=?""",
+            (time.time(), guild_id, channel_id))
+        await db.commit()
+        return cursor.rowcount > 0
+
+async def _add_ignored(table, column, guild_id, target_id):
+    """Put one id into an ignore table. False when it was already there."""
+    # the table and column names come from the helpers below, never from a user
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            f"INSERT OR IGNORE INTO {table} (guild_id, {column}) VALUES (?, ?)",
+            (guild_id, target_id))
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def _remove_ignored(table, column, guild_id, target_id):
+    """Take one id out of an ignore table. False when it was not there."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            f"DELETE FROM {table} WHERE guild_id=? AND {column}=?",
+            (guild_id, target_id))
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def _list_ignored(table, column, guild_id):
+    """The ids of one ignore table as a set, so the XP checks stay O(1)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+                f"SELECT {column} FROM {table} WHERE guild_id=?",
+                (guild_id,)) as cur:
+            return {row[0] for row in await cur.fetchall()}
+
+
+async def list_ignored_channels(guild_id):
+    """Channels that earn no XP, both text and voice ones."""
+    return await _list_ignored("ignored_channels", "channel_id", guild_id)
+
+
+async def add_ignored_channel(guild_id, channel_id):
+    """Stop XP in a channel. False when it was ignored already."""
+    return await _add_ignored("ignored_channels", "channel_id",
+                              guild_id, channel_id)
+
+
+async def remove_ignored_channel(guild_id, channel_id):
+    """Let a channel earn XP again. False when it was not ignored."""
+    return await _remove_ignored("ignored_channels", "channel_id",
+                                 guild_id, channel_id)
+
+
+async def list_ignored_roles(guild_id):
+    """Roles whose holders earn no XP."""
+    return await _list_ignored("ignored_roles", "role_id", guild_id)
+
+
+async def add_ignored_role(guild_id, role_id):
+    """Stop XP for a role. False when it was ignored already."""
+    return await _add_ignored("ignored_roles", "role_id", guild_id, role_id)
+
+
+async def remove_ignored_role(guild_id, role_id):
+    """Let a role earn XP again. False when it was not ignored."""
+    return await _remove_ignored("ignored_roles", "role_id",
+                                 guild_id, role_id)
+

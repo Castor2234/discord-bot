@@ -47,12 +47,12 @@ async def on_message(message):
 @bot.command()
 @commands.has_permissions(administrator = True)
 async def admin(ctx):
-    await ctx.send(f"Hello admin {ctx.author.mention}")
+    await ctx.send(f"Привет админ {ctx.author.mention}")
 
 @admin.error
 async def admin_error(ctx,error):
     if isinstance(error,commands.MissingPermissions):
-        await ctx.send("You do not have admin permissions")
+        await ctx.send("Вы не админ")
 
 
 
