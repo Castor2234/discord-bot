@@ -1,10 +1,11 @@
-"""Economy cog: coins, the daily reward and the shop.
+"""Economy cog: coins, the daily reward, the shop and the /upgrade gamble.
 
 Coins live in the users.balance column (see db.py), so the levels cog pays
 into the same wallet that is spent here.
 """
 
 import logging
+import random
 import time
 
 import discord
@@ -14,24 +15,30 @@ from discord.ext import commands
 
 from db import (
     claim_daily,
-    get_purchase,
+    gamble,
     get_recent_purchases,
     get_shop_item,
     get_shop_items,
     get_user,
-    record_purchase,
+    purchase_item,
     set_purchase_status,
-    spend_balance,
 )
 
 # ------------------------------------------------------------------ settings
-CURRENCY_NAME = "манго <:dota_mango:1554514974121009152>"                  
+CURRENCY_NAME = "манго <:dota_mango:1554514974121009152>"
 SHOP_LOG_CHANNEL_ID: int | None = None   # staff channel for new orders
 DAILY_ENABLED = True
 DAILY_AMOUNT = 5
 DAILY_INTERVAL = 24 * 3600               # seconds between two claims
 PENDING_STATUS = "pending"
 DELIVERED_STATUS = "delivered"
+
+# /upgrade: pay UPGRADE_COST, win it once more with UPGRADE_WIN_CHANCE,
+# otherwise lose it
+UPGRADE_ENABLED = True
+UPGRADE_COST = 5
+UPGRADE_WIN_CHANCE = 0.5
+UPGRADE_COOLDOWN = 3.0                   # seconds between two tries of one member
 
 # user facing texts
 BALANCE_MESSAGE = "Баланс пользователя {mention}: **{balance}** {currency}."
@@ -53,9 +60,20 @@ ORDER_NOT_FOUND = "Заказа **#{order_id}** не существует."
 DAILY_CLAIMED = "<:pudge:1554517617434296320> Ежедневная награда получена: **{amount}** {currency}. Баланс: **{balance}** {currency}."
 DAILY_WAITING = "Вы уже забрали ежедневную награду. Вернитесь спустя **{hours}ч {minutes}м**."
 DAILY_DISABLED = "Ежедневная награда отключена."
+UPGRADE_DESCRIPTION = (f"Рискни {UPGRADE_COST} манго: "
+                       f"{UPGRADE_WIN_CHANCE:.0%} удвоить, иначе потерять")
+UPGRADE_WIN = ("🎉 {mention} рискнул {cost} {currency} и **удвоил**! "
+               "Выигрыш: **+{cost}** {currency}. Баланс: **{balance}** {currency}.")
+UPGRADE_LOSE = ("💥 {mention} рискнул {cost} {currency} и **проиграл**. "
+                "Потеряно: **-{cost}** {currency}. Баланс: **{balance}** {currency}.")
+UPGRADE_DISABLED = "Улучшение отключено."
+UPGRADE_COOLDOWN_MESSAGE = "Не так быстро! Попробуй ещё раз через **{seconds}** с."
 PERMISSION_ERROR = "У тебя нет **Manage Server** прав для использования этой команды."
 MEMBER_NOT_FOUND_ERROR = "Не нашел такого пользователя."
 DATE_FORMAT = "%Y-%m-%d %H:%M"
+
+# the draw comes from the operating system's randomness, not a seeded generator
+_rng = random.SystemRandom()
 
 
 def coins(amount: int) -> str:
@@ -81,7 +99,7 @@ class ItemNotFound(commands.CommandError):
 
 
 class Economy(commands.Cog):
-    """Coins, the daily reward and the shop."""
+    """Coins, the daily reward, the shop and /upgrade."""
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
@@ -122,6 +140,26 @@ class Economy(commands.Cog):
                                             currency=CURRENCY_NAME,
                                             balance=balance))
 
+    # --------------------------------------------------------------- upgrade
+    @app_commands.command(name="upgrade", description=UPGRADE_DESCRIPTION)
+    @app_commands.guild_only()
+    @app_commands.checks.cooldown(1, UPGRADE_COOLDOWN)
+    async def upgrade(self, interaction: discord.Interaction) -> None:
+        """Risk UPGRADE_COST coins: double them or lose them."""
+        if not UPGRADE_ENABLED:
+            await interaction.response.send_message(UPGRADE_DISABLED,
+                                                    ephemeral=True)
+            return
+        won = _rng.random() < UPGRADE_WIN_CHANCE
+        played, balance = await gamble(interaction.guild.id,
+                                       interaction.user.id, UPGRADE_COST, won)
+        if not played:
+            raise InsufficientFunds(UPGRADE_COST, balance)
+        template = UPGRADE_WIN if won else UPGRADE_LOSE
+        await interaction.response.send_message(template.format(
+            mention=interaction.user.mention, cost=UPGRADE_COST,
+            currency=CURRENCY_NAME, balance=balance))
+
     # ------------------------------------------------------------------ shop
     @commands.hybrid_group(name="shop", description="Browse and buy shop items")
     @commands.guild_only()
@@ -139,14 +177,15 @@ class Economy(commands.Cog):
     @commands.guild_only()
     async def shop_buy(self, ctx: commands.Context, item: str) -> None:
         """Buy `item` (its code, e.g. `1x6`) with your coins."""
-        shop_item, balance, order_id = await self.purchase(
+        shop_item, price, balance, order_id = await self.purchase(
             ctx.guild, ctx.author, item)
         await ctx.send(PURCHASE_MESSAGE.format(name=shop_item["name"],
-                                               price=shop_item["price"],
+                                               price=price,
                                                balance=balance,
                                                order_id=order_id),
                        ephemeral=True)
-        await self.notify_purchase(ctx.guild, ctx.author, shop_item, order_id)
+        await self.notify_purchase(ctx.guild, ctx.author, shop_item, price,
+                                   order_id)
 
     @shop.command(name="orders", description="Show recent orders (staff)")
     @commands.guild_only()
@@ -177,12 +216,12 @@ class Economy(commands.Cog):
     @commands.has_permissions(manage_guild=True)
     async def shop_fulfil(self, ctx: commands.Context, order_id: int) -> None:
         """Mark order `order_id` as delivered."""
-        order = await get_purchase(order_id)
-        if order is None or order["guild_id"] != ctx.guild.id:
+        # passing the guild id means a server can only touch its own orders
+        if not await set_purchase_status(order_id, DELIVERED_STATUS,
+                                         ctx.guild.id):
             await ctx.send(ORDER_NOT_FOUND.format(order_id=order_id),
                            ephemeral=True)
             return
-        await set_purchase_status(order_id, DELIVERED_STATUS)
         await ctx.send(ORDER_UPDATED.format(order_id=order_id,
                                             status=DELIVERED_STATUS))
 
@@ -206,21 +245,22 @@ class Economy(commands.Cog):
 
     async def purchase(self, guild: discord.Guild, member: discord.Member,
                        query: str) -> tuple:
-        """Spend coins for `query` and record the order.
+        """Buy `query` for `member`: coins and order change in ONE transaction.
 
-        Returns (item, new_balance, order_id). Raises ItemNotFound or
+        Returns (item, price, new_balance, order_id). Raises ItemNotFound or
         InsufficientFunds so the command layer stays free of branch logic.
         """
-        item = await get_shop_item(query)
-        if item is None or not item["active"]:
+        item = await get_shop_item(query)   # active items only
+        if item is None:
             raise ItemNotFound(query)
-        if not await spend_balance(guild.id, member.id, item["price"]):
-            balance = (await get_user(guild.id, member.id))["balance"]
-            raise InsufficientFunds(item["price"], balance)
-        order_id = await record_purchase(guild.id, member.id,
-                                        item["item_id"], item["price"])
+        status, order_id, price = await purchase_item(
+            guild.id, member.id, item["item_id"])
+        if status == "not_found":           # hidden or removed just now
+            raise ItemNotFound(query)
         balance = (await get_user(guild.id, member.id))["balance"]
-        return item, balance, order_id
+        if status == "insufficient":
+            raise InsufficientFunds(price, balance)
+        return item, price, balance, order_id
 
     @staticmethod
     def shop_log_channel(guild: discord.Guild) -> Messageable | None:
@@ -232,14 +272,14 @@ class Economy(commands.Cog):
         return guild.system_channel
 
     async def notify_purchase(self, guild: discord.Guild, member: discord.Member,
-                              item, order_id: int) -> None:
+                              item, price: int, order_id: int) -> None:
         """Tell the staff about a new order (best effort)."""
         channel = self.shop_log_channel(guild)
         if channel is None:
             return
         try:
             await channel.send(PURCHASE_LOG.format(
-                mention=member.mention, name=item["name"], price=item["price"],
+                mention=member.mention, name=item["name"], price=price,
                 order_id=order_id, status=PENDING_STATUS))
         except discord.HTTPException:
             pass  # the order is recorded, the log message is a bonus
@@ -277,6 +317,10 @@ class Economy(commands.Cog):
             items = await get_shop_items()
             available = ", ".join(f"`{item['code']}`" for item in items) or "-"
             return ITEM_NOT_FOUND.format(query=error.query, available=available)
+        # must come before the CheckFailure branch: a cooldown is a CheckFailure
+        if isinstance(error, app_commands.CommandOnCooldown):
+            return UPGRADE_COOLDOWN_MESSAGE.format(
+                seconds=max(1, round(error.retry_after)))
         if isinstance(error, (commands.MissingPermissions, commands.CheckFailure,
                               app_commands.CheckFailure)):
             return PERMISSION_ERROR
