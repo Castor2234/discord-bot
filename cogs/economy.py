@@ -14,6 +14,7 @@ from discord.abc import Messageable
 from discord.ext import commands
 
 from db import (
+    add_balance,
     claim_daily,
     gamble,
     get_recent_purchases,
@@ -21,6 +22,7 @@ from db import (
     get_shop_items,
     get_user,
     purchase_item,
+    remove_balance,
     set_purchase_status,
 )
 
@@ -68,6 +70,12 @@ UPGRADE_LOSE = ("💥 {mention} рискнул {cost} {currency} и **проиг
                 "Потеряно: **-{cost}** {currency}. Баланс: **{balance}** {currency}.")
 UPGRADE_DISABLED = "Улучшение отключено."
 UPGRADE_COOLDOWN_MESSAGE = "Не так быстро! Попробуй ещё раз через **{seconds}** с."
+ADMIN_MAX_AMOUNT = 1_000_000             # largest single /addcoins or /removecoins
+ADMIN_ADDED = "✅ {mention} получает **{amount}** {currency}. Баланс: **{balance}** {currency}."
+ADMIN_REMOVED = "✅ У {mention} снято **{removed}** {currency}. Баланс: **{balance}** {currency}."
+ADMIN_REMOVED_PARTLY = ("✅ У {mention} было меньше, чем {amount}, снято только "
+                        "**{removed}** {currency}. Баланс: **{balance}** {currency}.")
+ADMIN_NOT_FOR_BOTS = "Ботам нельзя выдавать или снимать монеты."
 PERMISSION_ERROR = "У тебя нет **Manage Server** прав для использования этой команды."
 MEMBER_NOT_FOUND_ERROR = "Не нашел такого пользователя."
 DATE_FORMAT = "%Y-%m-%d %H:%M"
@@ -158,6 +166,49 @@ class Economy(commands.Cog):
         template = UPGRADE_WIN if won else UPGRADE_LOSE
         await interaction.response.send_message(template.format(
             mention=interaction.user.mention, cost=UPGRADE_COST,
+            currency=CURRENCY_NAME, balance=balance))
+
+    # ----------------------------------------------------------------- admin
+    @app_commands.command(name="addcoins",
+                          description="Give coins to a member (staff)")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def addcoins(
+            self, interaction: discord.Interaction, member: discord.Member,
+            amount: app_commands.Range[int, 1, ADMIN_MAX_AMOUNT]) -> None:
+        """Give `amount` coins to `member`."""
+        if member.bot:
+            await interaction.response.send_message(ADMIN_NOT_FOR_BOTS,
+                                                    ephemeral=True)
+            return
+        # the reason ends up in the coin log, so it shows who did it
+        await add_balance(interaction.guild.id, member.id, amount,
+                          reason=f"admin:{interaction.user.id}")
+        balance = (await get_user(interaction.guild.id, member.id))["balance"]
+        await interaction.response.send_message(ADMIN_ADDED.format(
+            mention=member.mention, amount=amount, currency=CURRENCY_NAME,
+            balance=balance))
+
+    @app_commands.command(name="removecoins",
+                          description="Take coins from a member (staff)")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def removecoins(
+            self, interaction: discord.Interaction, member: discord.Member,
+            amount: app_commands.Range[int, 1, ADMIN_MAX_AMOUNT]) -> None:
+        """Take up to `amount` coins from `member` (the balance stops at 0)."""
+        if member.bot:
+            await interaction.response.send_message(ADMIN_NOT_FOR_BOTS,
+                                                    ephemeral=True)
+            return
+        removed = await remove_balance(interaction.guild.id, member.id, amount,
+                                       reason=f"admin:{interaction.user.id}")
+        balance = (await get_user(interaction.guild.id, member.id))["balance"]
+        template = ADMIN_REMOVED if removed == amount else ADMIN_REMOVED_PARTLY
+        await interaction.response.send_message(template.format(
+            mention=member.mention, amount=amount, removed=removed,
             currency=CURRENCY_NAME, balance=balance))
 
     # ------------------------------------------------------------------ shop
