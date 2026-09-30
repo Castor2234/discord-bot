@@ -6,6 +6,7 @@ from db import init_db
 
 load_dotenv()
 token = os.getenv('DISCORD_TOKEN')
+guild_id = int(os.getenv('GUILD_ID'))
 
 COGS = ("cogs.levels", "cogs.economy", "cogs.roles")
 
@@ -17,7 +18,7 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="-", intents=intents)
 
-guild = discord.Object(id=723275447755866286)
+guild = discord.Object(id=guild_id)
 
 @bot.event
 async def setup_hook():
