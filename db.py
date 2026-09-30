@@ -404,6 +404,36 @@ async def transfer(guild_id, from_id, to_id, amount):
     return "ok"
 
 
+async def gamble(guild_id, user_id, stake, won, reason="upgrade"):
+    """Settle a coin flip: +stake when `won`, -stake otherwise.
+
+    The user must own at least `stake` coins. The check and the balance change
+    are one statement, so fast repeated calls can never overdraw the wallet.
+    The random draw itself is made by the caller.
+
+    Returns (played, balance): played is False (and nothing changed) when the
+    user could not afford the stake; balance is the wallet after the call.
+    """
+    if stake <= 0:
+        raise ValueError("stake must be positive")
+    delta = stake if won else -stake
+    async with _connect() as db:
+        await ensure_user(db, guild_id, user_id)
+        cursor = await db.execute(
+            """UPDATE users SET balance = balance + ?
+               WHERE guild_id=? AND user_id=? AND balance >= ?""",
+            (delta, guild_id, user_id, stake))
+        played = cursor.rowcount > 0
+        if played:
+            await _log_tx(db, guild_id, user_id, delta, reason)
+        await db.commit()
+        async with db.execute(
+            "SELECT balance FROM users WHERE guild_id=? AND user_id=?",
+            (guild_id, user_id)) as cur:
+            row = await cur.fetchone()
+    return played, row[0]
+
+
 async def claim_daily(guild_id, user_id, amount, cooldown):
     """Pay the daily coins unless the user already claimed them.
 
