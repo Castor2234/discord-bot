@@ -21,7 +21,7 @@ DB_TIMEOUT = 10  # seconds to wait for a locked database before giving up
 STARTING_ITEM_CODE = "1x6"
 STARTING_ITEM_NAME = "1 игра в 1x6"
 STARTING_ITEM_DESCRIPTION = "Одна игра в кастомку 1x6"
-STARTING_ITEM_PRICE = 25
+STARTING_ITEM_PRICE = 40
 
 # statuses an order may have; extend this set if you need more
 PURCHASE_STATUSES = {"pending", "delivered", "cancelled"}
