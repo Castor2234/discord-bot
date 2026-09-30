@@ -36,15 +36,6 @@ async def setup_hook():
 async def on_ready():
     print(f"{bot.user.name} готов")
 
-@bot.event
-async def on_message(message):
-    if message.author.bot:
-        return
-    if "пасхалка" in message.content.lower():
-        await message.channel.send(f"{message.author.mention} - сам ты пасхалка")
-    
-    await bot.process_commands(message)
-
 @bot.command()
 @commands.has_permissions(administrator = True)
 async def admin(ctx):
