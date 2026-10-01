@@ -35,10 +35,11 @@ DAILY_INTERVAL = 24 * 3600               # seconds between two claims
 PENDING_STATUS = "pending"
 DELIVERED_STATUS = "delivered"
 
-# /upgrade: pay UPGRADE_COST, win it once more with UPGRADE_WIN_CHANCE,
-# otherwise lose it
+# /upgrade: bet UPGRADE_DEFAULT_BET (up to UPGRADE_MAX_BET), win it once more
+# with UPGRADE_WIN_CHANCE, otherwise lose it
 UPGRADE_ENABLED = True
-UPGRADE_COST = 5
+UPGRADE_DEFAULT_BET = 5
+UPGRADE_MAX_BET = 100
 UPGRADE_WIN_CHANCE = 0.5
 UPGRADE_COOLDOWN = 3.0                   # seconds between two tries of one member
 
@@ -62,12 +63,13 @@ ORDER_NOT_FOUND = "Заказа **#{order_id}** не существует."
 DAILY_CLAIMED = "<:pudge:1554517617434296320> Ежедневная награда получена: **{amount}** {currency}. Баланс: **{balance}** {currency}."
 DAILY_WAITING = "Вы уже забрали ежедневную награду. Вернитесь спустя **{hours}ч {minutes}м**."
 DAILY_DISABLED = "Ежедневная награда отключена."
-UPGRADE_DESCRIPTION = (f"Рискни {UPGRADE_COST} манго: "
+UPGRADE_DESCRIPTION = (f"Рискни манго: "
                        f"{UPGRADE_WIN_CHANCE:.0%} удвоить, иначе потерять")
-UPGRADE_WIN = ("🎉 {mention} рискнул {cost} {currency} и **удвоил**! "
-               "Выигрыш: **+{cost}** {currency}. Баланс: **{balance}** {currency}.")
-UPGRADE_LOSE = ("💥 {mention} рискнул {cost} {currency} и **проиграл**. "
-                "Потеряно: **-{cost}** {currency}. Баланс: **{balance}** {currency}.")
+UPGRADE_BET = f"Сколько манго поставить (1-{UPGRADE_MAX_BET})"
+UPGRADE_WIN = ("🎉 {mention} рискнул {bet} {currency} и **удвоил**! "
+               "Выигрыш: **+{bet}** {currency}. Баланс: **{balance}** {currency}.")
+UPGRADE_LOSE = ("💥 {mention} рискнул {bet} {currency} и **проиграл**. "
+                "Потеряно: **-{bet}** {currency}. Баланс: **{balance}** {currency}.")
 UPGRADE_DISABLED = "Улучшение отключено."
 UPGRADE_COOLDOWN_MESSAGE = "Не так быстро! Попробуй ещё раз через **{seconds}** с."
 ADMIN_MAX_AMOUNT = 1_000_000             # largest single /addcoins or /removecoins
@@ -152,20 +154,23 @@ class Economy(commands.Cog):
     @app_commands.command(name="upgrade", description=UPGRADE_DESCRIPTION)
     @app_commands.guild_only()
     @app_commands.checks.cooldown(1, UPGRADE_COOLDOWN)
-    async def upgrade(self, interaction: discord.Interaction) -> None:
-        """Risk UPGRADE_COST coins: double them or lose them."""
+    @app_commands.describe(bet=UPGRADE_BET)
+    async def upgrade(self, interaction: discord.Interaction,
+                      bet: app_commands.Range[int, 1, UPGRADE_MAX_BET]
+                      = UPGRADE_DEFAULT_BET) -> None:
+        """Risk `bet` coins: double them or lose them."""
         if not UPGRADE_ENABLED:
             await interaction.response.send_message(UPGRADE_DISABLED,
                                                     ephemeral=True)
             return
         won = _rng.random() < UPGRADE_WIN_CHANCE
         played, balance = await gamble(interaction.guild.id,
-                                       interaction.user.id, UPGRADE_COST, won)
+                                       interaction.user.id, bet, won)
         if not played:
-            raise InsufficientFunds(UPGRADE_COST, balance)
+            raise InsufficientFunds(bet, balance)
         template = UPGRADE_WIN if won else UPGRADE_LOSE
         await interaction.response.send_message(template.format(
-            mention=interaction.user.mention, cost=UPGRADE_COST,
+            mention=interaction.user.mention, bet=bet,
             currency=CURRENCY_NAME, balance=balance))
 
     # ----------------------------------------------------------------- admin
