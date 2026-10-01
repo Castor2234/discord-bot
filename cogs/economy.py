@@ -15,20 +15,27 @@ from discord.ext import commands
 
 from db import (
     add_balance,
+    add_shop_item,
     claim_daily,
     gamble,
     get_recent_purchases,
     get_shop_item,
     get_shop_items,
     get_user,
+    hide_shop_item,
     purchase_item,
     remove_balance,
+    restore_shop_item,
     set_purchase_status,
+    set_shop_item_price,
 )
 
 # ------------------------------------------------------------------ settings
 CURRENCY_NAME = "манго <:dota_mango:1554514974121009152>"
 SHOP_LOG_CHANNEL_ID: int | None = None   # staff channel for new orders
+SHOP_MAX_PRICE = 1_000_000               # largest price /shop setprice accepts
+SHOP_CODE_MAX = 32                       # longest code /shop add accepts
+SHOP_NAME_MAX = 100                      # longest name /shop add accepts
 DAILY_ENABLED = True
 DAILY_AMOUNT = 5
 DAILY_INTERVAL = 24 * 3600               # seconds between two claims
@@ -48,6 +55,17 @@ BALANCE_MESSAGE = "Баланс пользователя {mention}: **{balance}*
 SHOP_TITLE = "🛒 Магазин"
 SHOP_EMPTY = "Магазин пуст."
 SHOP_FOOTER = "Buy with `{prefix}shop buy <code>`."
+SHOP_ITEM_ADDED = "✅ Товар **{name}** (`{code}`) добавлен за 🪙 {price}."
+SHOP_ITEM_EXISTS = ("Товар с кодом `{code}` уже существует. Если он скрыт, "
+                    "верните его командой `restore`.")
+SHOP_ITEM_PRICED = "✅ Цена **{name}** (`{code}`): 🪙 {old} → 🪙 {new}."
+SHOP_ITEM_HIDDEN = "🗑 Товар **{name}** (`{code}`) убран из магазина."
+SHOP_ITEM_ALREADY_HIDDEN = "Товар **{name}** (`{code}`) и так не в магазине."
+SHOP_ITEM_RESTORED = "♻️ Товар **{name}** (`{code}`) снова в магазине за 🪙 {price}."
+SHOP_ITEM_ALREADY_ON_SALE = "Товар **{name}** (`{code}`) и так в магазине."
+SHOP_ITEM_NOT_FOUND = "В магазине нет товара `{query}`."
+SHOP_BAD_CODE = ("Код должен быть 1-{max} символов, без пробелов и не только "
+                 "из цифр.")
 SHOP_LINE = "**{name}** — 🪙 {price} (`{code}`)\n{description}"
 PURCHASE_MESSAGE = ("🛒 You bought **{name}** for 🪙 {price}. "
                     "Balance: 🪙 {balance}. Order **#{order_id}**.")
@@ -280,6 +298,99 @@ class Economy(commands.Cog):
             return
         await interaction.response.send_message(
             ORDER_UPDATED.format(order_id=order_id, status=DELIVERED_STATUS))
+
+    @shop.command(name="add", description="Add an item to the shop (staff)")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.describe(
+        code="Short unique code members type to buy it, e.g. 1x6",
+        name="Display name of the item",
+        price="Price in coins",
+        description="Optional line shown under the item",
+    )
+    async def shop_add(self, interaction: discord.Interaction,
+                       code: app_commands.Range[str, 1, SHOP_CODE_MAX],
+                       name: app_commands.Range[str, 1, SHOP_NAME_MAX],
+                       price: app_commands.Range[int, 1, SHOP_MAX_PRICE],
+                       description: str = "") -> None:
+        """Add a new item to the catalogue."""
+        code = code.strip().lower()
+        if not code or any(char.isspace() for char in code) or code.isdigit():
+            await interaction.response.send_message(
+                SHOP_BAD_CODE.format(max=SHOP_CODE_MAX), ephemeral=True)
+            return
+        row = await add_shop_item(code, name.strip(), description.strip(),
+                                  price)
+        if row is None:
+            await interaction.response.send_message(
+                SHOP_ITEM_EXISTS.format(code=code), ephemeral=True)
+            return
+        await interaction.response.send_message(SHOP_ITEM_ADDED.format(
+            name=row["name"], code=row["code"], price=row["price"]),
+            ephemeral=True)
+
+    @shop.command(name="setprice",
+                  description="Change the price of an item (staff)")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.describe(code="Code (or numeric id) of the item",
+                           price="New price in coins")
+    async def shop_setprice(
+            self, interaction: discord.Interaction, code: str,
+            price: app_commands.Range[int, 1, SHOP_MAX_PRICE]) -> None:
+        """Change the price of an existing item, hidden or not."""
+        query = code.strip()
+        row = await set_shop_item_price(query, price)
+        if row is None:
+            await interaction.response.send_message(
+                SHOP_ITEM_NOT_FOUND.format(query=query), ephemeral=True)
+            return
+        await interaction.response.send_message(SHOP_ITEM_PRICED.format(
+            name=row["name"], code=row["code"], old=row["price"], new=price),
+            ephemeral=True)
+
+    @shop.command(name="hide",
+                  description="Remove an item from the shop (staff)")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.describe(code="Code (or numeric id) of the item")
+    async def shop_hide(self, interaction: discord.Interaction,
+                        code: str) -> None:
+        """Hide an item so it can no longer be bought (orders keep it)."""
+        query = code.strip()
+        row = await hide_shop_item(query)
+        if row is None:
+            await interaction.response.send_message(
+                SHOP_ITEM_NOT_FOUND.format(query=query), ephemeral=True)
+            return
+        if not row["active"]:
+            await interaction.response.send_message(
+                SHOP_ITEM_ALREADY_HIDDEN.format(name=row["name"],
+                                                code=row["code"]),
+                ephemeral=True)
+            return
+        await interaction.response.send_message(SHOP_ITEM_HIDDEN.format(
+            name=row["name"], code=row["code"]), ephemeral=True)
+
+    @shop.command(name="restore",
+                  description="Put a hidden item back on sale (staff)")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.describe(code="Code (or numeric id) of the item")
+    async def shop_restore(self, interaction: discord.Interaction,
+                           code: str) -> None:
+        """Bring a hidden item back to the catalogue."""
+        query = code.strip()
+        row = await restore_shop_item(query)
+        if row is None:
+            await interaction.response.send_message(
+                SHOP_ITEM_NOT_FOUND.format(query=query), ephemeral=True)
+            return
+        if row["active"]:
+            await interaction.response.send_message(
+                SHOP_ITEM_ALREADY_ON_SALE.format(name=row["name"],
+                                                 code=row["code"]),
+                ephemeral=True)
+            return
+        await interaction.response.send_message(SHOP_ITEM_RESTORED.format(
+            name=row["name"], code=row["code"], price=row["price"]),
+            ephemeral=True)
 
     # ------------------------------------------------------------- internals
     async def send_catalogue(self, interaction: discord.Interaction) -> None:

@@ -1,9 +1,11 @@
-"""Offline checks for the economy cog's /upgrade bet option.
+"""Offline checks for the economy cog: the /upgrade bet and the staff shop tools.
 
 Run with:  python check_economy.py   (prints "ALL GOOD" and exits 0 when green)
 
-Covers the bet added to /upgrade: the default (5), the hard cap (100) and that
-exactly the amount the caller passed is what reaches the wallet and the answer.
+Covers the bet added to /upgrade - the default (5), the hard cap (100) and that
+exactly the amount the caller passed is what reaches the wallet and the answer -
+plus the staff commands that manage the catalogue: /shop add, setprice, hide and
+restore, including the `active` flag that takes an item off the shelf.
 Everything runs against a throwaway database in the temp folder, so the real
 bot.db is never touched.
 """
@@ -159,6 +161,116 @@ async def main():
     except ec.InsufficientFunds as error:
         check("poor user refused", error.price, ec.UPGRADE_DEFAULT_BET)
     check("nothing taken on a refusal", await balance(), 0)
+
+    # ------------------------------------------------ the staff shop commands
+    group = bot.tree.get_command("shop")
+    check("shop is a group", isinstance(group, discord.app_commands.Group),
+          True)
+    check("shop subcommands", sorted(c.name for c in group.walk_commands()),
+          ["add", "buy", "fulfil", "hide", "list", "orders", "restore",
+           "setprice"])
+    check("shop staff gating", {c.name: bool(c.checks) for c in group.commands},
+          {"list": False, "buy": False, "add": True, "setprice": True,
+           "hide": True, "restore": True, "orders": True, "fulfil": True})
+    add = group.get_command("add")
+    add_params = {p.name: p for p in add.parameters}
+    check("add params", sorted(add_params),
+          ["code", "description", "name", "price"])
+    check("add code length",
+          (add_params["code"].min_value, add_params["code"].max_value),
+          (1, ec.SHOP_CODE_MAX))
+    check("add name length",
+          (add_params["name"].min_value, add_params["name"].max_value),
+          (1, ec.SHOP_NAME_MAX))
+    check("add price range",
+          (add_params["price"].min_value, add_params["price"].max_value),
+          (1, ec.SHOP_MAX_PRICE))
+    check("add description optional", add_params["description"].required, False)
+    check("setprice params",
+          sorted(p.name for p in group.get_command("setprice").parameters),
+          ["code", "price"])
+    check("hide params",
+          sorted(p.name for p in group.get_command("hide").parameters),
+          ["code"])
+    check("restore params",
+          sorted(p.name for p in group.get_command("restore").parameters),
+          ["code"])
+
+    # ------------------------------------------------------- the catalogue
+    row = await db.add_shop_item("2x4", "Double", "a test item", 30)
+    check("item added", (row["code"], row["name"], row["price"], row["active"]),
+          ("2x4", "Double", 30, 1))
+    # cheapest first: 2x4 costs 30, the seeded 1x6 costs 40
+    check("item shows up in the catalogue",
+          [r["code"] for r in await db.get_shop_items()], ["2x4", "1x6"])
+    check("a taken code is refused", await db.add_shop_item("2x4", "Again"), None)
+
+    before = await db.set_shop_item_price("2x4", 45)
+    check("price change returns the old row", before["price"], 30)
+    check("new price stored", (await db.get_shop_item("2x4"))["price"], 45)
+    check("price of an unknown item",
+          await db.set_shop_item_price("nope", 1), None)
+
+    before = await db.hide_shop_item("2x4")
+    check("hide returns the row as it was", before["active"], 1)
+    check("hidden item leaves the catalogue",
+          [r["code"] for r in await db.get_shop_items()], ["1x6"])
+    check("hidden item is not found by buyers",
+          await db.get_shop_item("2x4"), None)
+    check("hidden row is still there",
+          (await db.get_shop_item("2x4", active_only=False))["price"], 45)
+    check("hidden item cannot be bought",
+          await db.purchase_item(GUILD_ID, USER_ID, before["item_id"]),
+          ("not_found", None, None))
+    check("hiding twice reports it was already hidden",
+          (await db.hide_shop_item("2x4"))["active"], 0)
+    check("hide of an unknown item", await db.hide_shop_item("nope"), None)
+
+    before = await db.restore_shop_item("2x4")
+    check("restore returns the row as it was", before["active"], 0)
+    check("restored item is back in the catalogue",
+          [r["code"] for r in await db.get_shop_items()], ["1x6", "2x4"])
+    check("restoring twice reports it was already on sale",
+          (await db.restore_shop_item("2x4"))["active"], 1)
+    check("restore of an unknown item", await db.restore_shop_item("nope"), None)
+
+    # -------------------------------------------------- the commands themselves
+    await cog.shop_add.callback(cog, interaction, " 3X3 ", "Tic", 50)
+    check("add lower cases the code", last(interaction),
+          ec.SHOP_ITEM_ADDED.format(name="Tic", code="3x3", price=50))
+    await cog.shop_add.callback(cog, interaction, "3x3", "Tic again", 1)
+    check("add refuses a taken code", last(interaction),
+          ec.SHOP_ITEM_EXISTS.format(code="3x3"))
+    await cog.shop_add.callback(cog, interaction, "4 4", "Spaces", 1)
+    check("add refuses a code with a space", last(interaction),
+          ec.SHOP_BAD_CODE.format(max=ec.SHOP_CODE_MAX))
+    await cog.shop_add.callback(cog, interaction, "123", "Digits", 1)
+    check("add refuses a numeric code", last(interaction),
+          ec.SHOP_BAD_CODE.format(max=ec.SHOP_CODE_MAX))
+
+    await cog.shop_setprice.callback(cog, interaction, "3x3", 60)
+    check("setprice answer", last(interaction),
+          ec.SHOP_ITEM_PRICED.format(name="Tic", code="3x3", old=50, new=60))
+    await cog.shop_setprice.callback(cog, interaction, "zzz", 10)
+    check("setprice of an unknown item", last(interaction),
+          ec.SHOP_ITEM_NOT_FOUND.format(query="zzz"))
+
+    await cog.shop_hide.callback(cog, interaction, "3x3")
+    check("hide answer", last(interaction),
+          ec.SHOP_ITEM_HIDDEN.format(name="Tic", code="3x3"))
+    await cog.shop_hide.callback(cog, interaction, "3x3")
+    check("hide twice", last(interaction),
+          ec.SHOP_ITEM_ALREADY_HIDDEN.format(name="Tic", code="3x3"))
+    await cog.shop_hide.callback(cog, interaction, "zzz")
+    check("hide of an unknown item", last(interaction),
+          ec.SHOP_ITEM_NOT_FOUND.format(query="zzz"))
+
+    await cog.shop_restore.callback(cog, interaction, "3x3")
+    check("restore answer", last(interaction),
+          ec.SHOP_ITEM_RESTORED.format(name="Tic", code="3x3", price=60))
+    await cog.shop_restore.callback(cog, interaction, "3x3")
+    check("restore twice", last(interaction),
+          ec.SHOP_ITEM_ALREADY_ON_SALE.format(name="Tic", code="3x3"))
 
     print("\n" + ("ALL GOOD" if not failures
                   else f"FAILURES ({len(failures)}):\n- "

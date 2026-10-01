@@ -497,6 +497,77 @@ async def get_shop_item(query, active_only=True):
             return await cur.fetchone()
 
 
+async def add_shop_item(code, name, description="", price=0):
+    """Add an item to the catalogue and return the stored row.
+
+    Returns None when `code` is already used. An item that was hidden by
+    `hide_shop_item` still holds its code, so re-adding it fails too - use
+    `restore_shop_item` for that one instead.
+    """
+    async with _connect() as db:
+        try:
+            cursor = await db.execute(
+                """INSERT INTO shop_items (code, name, description, price,
+                                           active)
+                   VALUES (?, ?, ?, ?, 1)""",
+                (code, name, description, price))
+            await db.commit()
+        except aiosqlite.IntegrityError:
+            await db.rollback()
+            return None
+        item_id = cursor.lastrowid
+    return await get_shop_item(item_id, active_only=False)
+
+
+async def set_shop_item_price(query, price):
+    """Change the price of an item found by code or numeric id.
+
+    Returns the row as it was BEFORE the change (so the caller still sees the
+    old price), or None when there is no such item.
+    """
+    item = await get_shop_item(query, active_only=False)
+    if item is None:
+        return None
+    async with _connect() as db:
+        await db.execute("UPDATE shop_items SET price=? WHERE item_id=?",
+                         (price, item["item_id"]))
+        await db.commit()
+    return item
+
+
+async def hide_shop_item(query):
+    """Take an item off the shelf (active=0) by code or numeric id.
+
+    The row is kept, so past orders still show the name and code. Returns the
+    row as it was BEFORE the change (an `active` of 0 means it was already
+    hidden), or None when there is no such item.
+    """
+    item = await get_shop_item(query, active_only=False)
+    if item is None:
+        return None
+    async with _connect() as db:
+        await db.execute("UPDATE shop_items SET active=0 WHERE item_id=?",
+                         (item["item_id"],))
+        await db.commit()
+    return item
+
+
+async def restore_shop_item(query):
+    """Put a hidden item back on sale (active=1) by code or numeric id.
+
+    Returns the row as it was BEFORE the change (an `active` of 1 means it was
+    already on sale), or None when there is no such item.
+    """
+    item = await get_shop_item(query, active_only=False)
+    if item is None:
+        return None
+    async with _connect() as db:
+        await db.execute("UPDATE shop_items SET active=1 WHERE item_id=?",
+                         (item["item_id"],))
+        await db.commit()
+    return item
+
+
 async def purchase_item(guild_id, user_id, item_id):
     """Buy an item: take the coins AND store the order in one transaction.
 
