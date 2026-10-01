@@ -40,7 +40,7 @@ DELIVERED_STATUS = "delivered"
 UPGRADE_ENABLED = True
 UPGRADE_DEFAULT_BET = 5
 UPGRADE_MAX_BET = 100
-UPGRADE_WIN_CHANCE = 0.5
+UPGRADE_WIN_CHANCE = 1
 UPGRADE_COOLDOWN = 3.0                   # seconds between two tries of one member
 
 # user facing texts
