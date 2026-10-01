@@ -42,7 +42,7 @@ async def on_ready():
             with open(RESTART_FILE) as f:
                 channel_id = json.load(f)["channel_id"]
             channel = bot.get_channel(channel_id) or await bot.fetch_channel(channel_id)
-            await channel.send(f"{bot.user.name} снова запущен")
+            await channel.send(f"{bot.user.name} снова в строю")
         except Exception as error:
             print(f"Не смог отправить сообщние. Ошибка: {error!r}")
         finally:
