@@ -392,22 +392,22 @@ class Levels(commands.Cog):
         return True
 
     # -------------------------------------------------------------- commands
-    @commands.hybrid_command(
+    @app_commands.command(
         name="rank", description="Show the level and XP of a member")
-    @commands.guild_only()
-    async def rank(self, ctx: commands.Context,
+    @app_commands.guild_only()
+    async def rank(self, interaction: discord.Interaction,
                    member: discord.Member | None = None) -> None:
         """Show the level, XP and leaderboard position of a member.
 
         Leave `member` empty to see your own rank.
         """
-        member = member or ctx.author
-        row = await get_user(ctx.guild.id, member.id)
+        member = member or interaction.user
+        row = await get_user(interaction.guild.id, member.id)
         xp = row["xp"]
         level = level_from_xp(xp)
         current = xp - total_xp_for_level(level)
         needed = xp_to_next_level(level)
-        position = await get_rank_position(ctx.guild.id, member.id)
+        position = await get_rank_position(interaction.guild.id, member.id)
 
         embed = discord.Embed(color=discord.Color.blurple())
         embed.set_author(name=member.display_name, icon_url=member.display_avatar.url)
@@ -420,210 +420,191 @@ class Levels(commands.Cog):
             inline=False,
         )
         embed.set_footer(text=f"{needed - current} XP to level {level + 1}")
-        await ctx.send(embed=embed)
+        await interaction.response.send_message(embed=embed)
 
-    @commands.hybrid_command(
+    @app_commands.command(
         name="leaderboard", description="Show the XP leaderboard of this server")
-    @commands.guild_only()
-    async def leaderboard(self, ctx: commands.Context) -> None:
+    @app_commands.guild_only()
+    async def leaderboard(self, interaction: discord.Interaction) -> None:
         """Show the ten members with the most XP."""
-        rows = await get_leaderboard(ctx.guild.id, 10)
+        rows = await get_leaderboard(interaction.guild.id, 10)
         if not rows:
-            await ctx.send(EMPTY_LEADERBOARD)
+            await interaction.response.send_message(EMPTY_LEADERBOARD)
             return
 
         lines = []
         for index, row in enumerate(rows, start=1):
-            member = ctx.guild.get_member(row["user_id"])
+            member = interaction.guild.get_member(row["user_id"])
             name = member.display_name if member else f"Unknown member ({row['user_id']})"
             marker = MEDALS.get(index, f"**{index}.**")
             lines.append(f"{marker} {name} — level {level_from_xp(row['xp'])}, {row['xp']} XP")
 
         embed = discord.Embed(
-            title=LEADERBOARD_TITLE.format(guild=ctx.guild.name),
+            title=LEADERBOARD_TITLE.format(guild=interaction.guild.name),
             description="\n".join(lines),
             color=discord.Color.gold(),
         )
-        await ctx.send(embed=embed)
+        await interaction.response.send_message(embed=embed)
 
     # ---------------------------------------------------- staff only commands
-    @commands.hybrid_group(
-        name="levels", description="Manage the XP and levels of this server")
-    @commands.guild_only()
-    @commands.has_permissions(manage_guild=True)
-    async def levels(self, ctx: commands.Context) -> None:
-        """Show how to use the level management commands."""
-        prefix = ctx.clean_prefix or "/"
-        await ctx.send(
-            "**Level management**\n"
-            f"`{prefix}levels addxp <member> <amount>` - give XP "
-            "(a negative amount takes XP away)\n"
-            f"`{prefix}levels setxp <member> <amount>` - overwrite the total XP\n"
-            f"`{prefix}levels resetxp <member>` - back to level 0\n"
-            f"`{prefix}levels levelup <channel> [everywhere]` - where to post "
-            "level ups, empty channel to reset\n"
-            f"`{prefix}levels ignorechannel <channel>` - stop XP in a channel "
-            f"(`{prefix}levels unignorechannel` lets it earn again)\n"
-            f"`{prefix}levels ignorerole <role>` - stop XP for a role "
-            f"(`{prefix}levels unignorerole` lets it earn again)\n"
-            f"`{prefix}levels settings` - show the channel and both ignore lists\n"
-            "The same names work as slash commands: `/levels [...]`."
-        )
+    levels = app_commands.Group(
+        name="levels", description="Manage the XP and levels of this server",
+        guild_only=True,
+        default_permissions=discord.Permissions(manage_guild=True))
 
     @levels.command(name="addxp", description="Add XP to a member")
-    @commands.guild_only()
-    @commands.has_permissions(manage_guild=True)
-    async def levels_addxp(self, ctx: commands.Context,
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def levels_addxp(self, interaction: discord.Interaction,
                            member: discord.Member, amount: int) -> None:
         """Add `amount` XP to `member`. A negative amount removes XP."""
-        row = await get_user(ctx.guild.id, member.id)
+        row = await get_user(interaction.guild.id, member.id)
         new_xp = max(0, row["xp"] + amount)
         new_level = level_from_xp(new_xp)
-        await set_xp(ctx.guild.id, member.id, new_xp, new_level)
-        await ctx.send(
+        await set_xp(interaction.guild.id, member.id, new_xp, new_level)
+        await interaction.response.send_message(
             f"{member.mention} now has **{new_xp} XP** (level **{new_level}**).")
 
-    @levels.command(name="setxp", description="Overwrite the total XP of a member")
-    @commands.guild_only()
-    @commands.has_permissions(manage_guild=True)
-    async def levels_setxp(self, ctx: commands.Context,
+    @levels.command(name="setxp",
+                    description="Overwrite the total XP of a member")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def levels_setxp(self, interaction: discord.Interaction,
                            member: discord.Member, amount: int) -> None:
         """Set the total XP of `member` to `amount`."""
         new_xp = max(0, amount)
         new_level = level_from_xp(new_xp)
-        await set_xp(ctx.guild.id, member.id, new_xp, new_level)
-        await ctx.send(
+        await set_xp(interaction.guild.id, member.id, new_xp, new_level)
+        await interaction.response.send_message(
             f"{member.mention} is now at **{new_xp} XP** (level **{new_level}**).")
 
-    @levels.command(name="resetxp", description="Reset a member back to level 0")
-    @commands.guild_only()
-    @commands.has_permissions(manage_guild=True)
-    async def levels_resetxp(self, ctx: commands.Context,
+    @levels.command(name="resetxp",
+                    description="Reset a member back to level 0")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def levels_resetxp(self, interaction: discord.Interaction,
                              member: discord.Member) -> None:
         """Delete every XP of `member`."""
-        await reset_xp(ctx.guild.id, member.id)
-        await ctx.send(f"{member.mention} is back to **level 0**.")
+        await reset_xp(interaction.guild.id, member.id)
+        await interaction.response.send_message(
+            f"{member.mention} is back to **level 0**.")
 
     # ------------------------------------------------------- level settings
     @levels.command(name="levelup",
                     description="Choose where the level up messages are posted")
-    @commands.guild_only()
-    @commands.has_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)
     @app_commands.describe(
         channel="Channel for the level up messages, empty to reset it",
         everywhere="Post every level up there, not only the voice ones",
     )
-    async def levels_levelup(self, ctx: commands.Context,
+    async def levels_levelup(self, interaction: discord.Interaction,
                              channel: discord.TextChannel | discord.Thread
                              | None = None,
                              everywhere: bool = False) -> None:
         """Store `channel` as the level up channel, empty resets the setting."""
         if channel is None:
-            await set_level_up_channel(ctx.guild.id, None)
-            self.forget_settings(ctx.guild.id)
+            await set_level_up_channel(interaction.guild.id, None)
+            self.forget_settings(interaction.guild.id)
             text = LEVEL_UP_CHANNEL_CLEARED
             if everywhere:
                 # the flag only means something together with a channel
                 text += LEVEL_UP_EVERYWHERE_NEEDS_CHANNEL
-            await ctx.send(text, ephemeral=True)
+            await interaction.response.send_message(text, ephemeral=True)
             return
 
-        self.check_writable_channel(ctx, channel)
-        await set_level_up_channel(ctx.guild.id, channel.id, everywhere)
-        self.forget_settings(ctx.guild.id)
+        self.check_writable_channel(interaction, channel)
+        await set_level_up_channel(interaction.guild.id, channel.id, everywhere)
+        self.forget_settings(interaction.guild.id)
         text = LEVEL_UP_CHANNEL_SET.format(channel=channel.mention)
         text += (LEVEL_UP_CHANNEL_EVERYWHERE_ON if everywhere
                  else LEVEL_UP_CHANNEL_EVERYWHERE_OFF)
-        settings = await self.settings_for(ctx.guild.id)
+        settings = await self.settings_for(interaction.guild.id)
         if settings.blocks_channel(channel.id):
             text += LEVEL_UP_CHANNEL_IGNORED_WARNING.format(
                 channel=channel.mention)
-        await ctx.send(text, ephemeral=True)
+        await interaction.response.send_message(text, ephemeral=True)
 
     @levels.command(name="ignorechannel",
                     description="Stop XP from being earned in a channel")
-    @commands.guild_only()
-    @commands.has_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)
     @app_commands.describe(channel="Text, voice or thread channel to mute")
     async def levels_ignorechannel(
-            self, ctx: commands.Context,
+            self, interaction: discord.Interaction,
             channel: discord.TextChannel | discord.VoiceChannel
             | discord.Thread) -> None:
         """Put `channel` on the ignore list so nothing earns XP there."""
-        added = await add_ignored_channel(ctx.guild.id, channel.id)
-        self.forget_settings(ctx.guild.id)
-        settings = await self.settings_for(ctx.guild.id)
+        added = await add_ignored_channel(interaction.guild.id, channel.id)
+        self.forget_settings(interaction.guild.id)
+        settings = await self.settings_for(interaction.guild.id)
         name = channel.mention
         if not added:
-            await ctx.send(CHANNEL_ALREADY_IGNORED.format(channel=name),
-                           ephemeral=True)
+            await interaction.response.send_message(
+                CHANNEL_ALREADY_IGNORED.format(channel=name), ephemeral=True)
             return
         text = CHANNEL_IGNORED.format(channel=name)
         if channel.id == settings.level_up_channel_id:
             text += CHANNEL_IS_LEVEL_UP.format(channel=name)
-        await ctx.send(text, ephemeral=True)
+        await interaction.response.send_message(text, ephemeral=True)
 
     @levels.command(name="unignorechannel",
                     description="Let a channel earn XP again")
-    @commands.guild_only()
-    @commands.has_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)
     @app_commands.describe(channel="Channel to take off the ignore list")
     async def levels_unignorechannel(
-            self, ctx: commands.Context,
+            self, interaction: discord.Interaction,
             channel: discord.TextChannel | discord.VoiceChannel
             | discord.Thread) -> None:
         """Take `channel` off the ignore list."""
-        removed = await remove_ignored_channel(ctx.guild.id, channel.id)
-        self.forget_settings(ctx.guild.id)
+        removed = await remove_ignored_channel(interaction.guild.id, channel.id)
+        self.forget_settings(interaction.guild.id)
         text = (CHANNEL_UNIGNORED if removed else CHANNEL_NOT_IGNORED)
-        await ctx.send(text.format(channel=channel.mention), ephemeral=True)
+        await interaction.response.send_message(
+            text.format(channel=channel.mention), ephemeral=True)
 
     @levels.command(name="ignorerole",
                     description="Stop XP from being earned by a role")
-    @commands.guild_only()
-    @commands.has_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)
     @app_commands.describe(role="Role whose members should stop earning XP")
-    async def levels_ignorerole(self, ctx: commands.Context,
+    async def levels_ignorerole(self, interaction: discord.Interaction,
                                 role: discord.Role) -> None:
         """Put `role` on the ignore list so its members earn nothing."""
         if role.is_default():
             raise LevelConfigError(ROLE_EVERYONE)
-        added = await add_ignored_role(ctx.guild.id, role.id)
-        self.forget_settings(ctx.guild.id)
+        added = await add_ignored_role(interaction.guild.id, role.id)
+        self.forget_settings(interaction.guild.id)
         text = (ROLE_IGNORED if added else ROLE_ALREADY_IGNORED)
-        await ctx.send(text.format(role=role.name), ephemeral=True)
+        await interaction.response.send_message(
+            text.format(role=role.name), ephemeral=True)
 
     @levels.command(name="unignorerole",
                     description="Let a role earn XP again")
-    @commands.guild_only()
-    @commands.has_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)
     @app_commands.describe(role="Role to take off the ignore list")
-    async def levels_unignorerole(self, ctx: commands.Context,
+    async def levels_unignorerole(self, interaction: discord.Interaction,
                                   role: discord.Role) -> None:
         """Take `role` off the ignore list."""
-        removed = await remove_ignored_role(ctx.guild.id, role.id)
-        self.forget_settings(ctx.guild.id)
+        removed = await remove_ignored_role(interaction.guild.id, role.id)
+        self.forget_settings(interaction.guild.id)
         text = (ROLE_UNIGNORED if removed else ROLE_NOT_IGNORED)
-        await ctx.send(text.format(role=role.name), ephemeral=True)
+        await interaction.response.send_message(
+            text.format(role=role.name), ephemeral=True)
 
     @levels.command(name="settings",
                     description="Show the level settings of this server")
-    @commands.guild_only()
-    @commands.has_permissions(manage_guild=True)
-    async def levels_settings(self, ctx: commands.Context) -> None:
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def levels_settings(self, interaction: discord.Interaction) -> None:
         """Show the announcement channel and both ignore lists of this server."""
-        self.forget_settings(ctx.guild.id)  # answer straight from the database
-        settings = await self.settings_for(ctx.guild.id)
-        channels, roles = await self.prune_missing(ctx.guild, settings)
+        # answer straight from the database
+        self.forget_settings(interaction.guild.id)
+        settings = await self.settings_for(interaction.guild.id)
+        channels, roles = await self.prune_missing(interaction.guild, settings)
         if channels or roles:
-            self.forget_settings(ctx.guild.id)
-            settings = await self.settings_for(ctx.guild.id)
+            self.forget_settings(interaction.guild.id)
+            settings = await self.settings_for(interaction.guild.id)
 
-        embed = discord.Embed(title=SETTINGS_TITLE.format(guild=ctx.guild.name),
-                              color=discord.Color.blurple())
+        embed = discord.Embed(
+            title=SETTINGS_TITLE.format(guild=interaction.guild.name),
+            color=discord.Color.blurple())
         embed.add_field(name=SETTINGS_CHANNEL_FIELD,
                         value=await self.channel_field(
-                            ctx.guild, settings.level_up_channel_id),
+                            interaction.guild, settings.level_up_channel_id),
                         inline=False)
         embed.add_field(name=SETTINGS_EVERYWHERE_FIELD,
                         value=SETTINGS_YES if settings.level_up_everywhere
@@ -639,7 +620,7 @@ class Levels(commands.Cog):
         if channels or roles:
             embed.set_footer(text=SETTINGS_PRUNED.format(channels=channels,
                                                          roles=roles))
-        await ctx.send(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ---------------------------------------------------------- view helpers
     @staticmethod
@@ -673,9 +654,10 @@ class Levels(commands.Cog):
         return channel.mention
 
     @staticmethod
-    def check_writable_channel(ctx: commands.Context, channel) -> None:
+    def check_writable_channel(interaction: discord.Interaction,
+                               channel) -> None:
         """Refuse a channel the bot cannot post in before storing its id."""
-        me = ctx.guild.me
+        me = interaction.guild.me
         if me is None:
             return  # nothing to compare against while the member cache is cold
         perms = channel.permissions_for(me)
@@ -744,26 +726,6 @@ class Levels(commands.Cog):
             self.forget_settings(role.guild.id)
 
     # ---------------------------------------------------------------- errors
-    async def cog_command_error(self, ctx: commands.Context,
-                                error: commands.CommandError) -> None:
-        """Handles failures of both the prefix and the slash invocation."""
-        if isinstance(error, commands.MissingPermissions):
-            await ctx.send(PERMISSION_ERROR, ephemeral=True)
-        elif isinstance(error, LevelConfigError):
-            await ctx.send(str(error), ephemeral=True)
-        elif isinstance(error, commands.MemberNotFound):
-            await ctx.send(MEMBER_NOT_FOUND_ERROR, ephemeral=True)
-        elif isinstance(error, commands.ChannelNotFound):
-            # a channel mention that no longer exists; both are BadArgument
-            # subclasses, so they have to be checked before the one below
-            await ctx.send(CHANNEL_NOT_FOUND_ERROR, ephemeral=True)
-        elif isinstance(error, commands.RoleNotFound):
-            await ctx.send(ROLE_NOT_FOUND_ERROR, ephemeral=True)
-        elif isinstance(error, commands.BadArgument):
-            await ctx.send(f"Invalid argument: {error}", ephemeral=True)
-        else:
-            raise error
-
     async def cog_app_command_error(self, interaction: discord.Interaction,
                                     error: app_commands.AppCommandError) -> None:
         """Handles the application command errors the tree forwards to the cog."""

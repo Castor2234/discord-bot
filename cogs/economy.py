@@ -116,39 +116,41 @@ class Economy(commands.Cog):
         self.log = logging.getLogger(__name__)
 
     # ---------------------------------------------------------------- wallet
-    @commands.hybrid_command(name="balance",
-                             description="Show how many coins someone has")
-    @commands.guild_only()
-    async def balance(self, ctx: commands.Context,
+    @app_commands.command(name="balance",
+                          description="Show how many coins someone has")
+    @app_commands.guild_only()
+    async def balance(self, interaction: discord.Interaction,
                       member: discord.Member | None = None) -> None:
         """Show the coin balance of a member (yours by default)."""
-        member = member or ctx.author
-        row = await get_user(ctx.guild.id, member.id)
+        member = member or interaction.user
+        row = await get_user(interaction.guild.id, member.id)
         embed = discord.Embed(
             description=BALANCE_MESSAGE.format(mention=member.mention,
                                                balance=row["balance"],
                                                currency=CURRENCY_NAME),
             color=discord.Color.gold())
         embed.set_thumbnail(url=member.display_avatar.url)
-        await ctx.send(embed=embed)
+        await interaction.response.send_message(embed=embed)
 
-    @commands.hybrid_command(name="daily", description="Claim your daily coins")
-    @commands.guild_only()
-    async def daily(self, ctx: commands.Context) -> None:
+    @app_commands.command(name="daily", description="Claim your daily coins")
+    @app_commands.guild_only()
+    async def daily(self, interaction: discord.Interaction) -> None:
         """Claim the once per day coin reward."""
         if not DAILY_ENABLED:
-            await ctx.send(DAILY_DISABLED, ephemeral=True)
+            await interaction.response.send_message(DAILY_DISABLED,
+                                                    ephemeral=True)
             return
         claimed, seconds_left, balance = await claim_daily(
-            ctx.guild.id, ctx.author.id, DAILY_AMOUNT, DAILY_INTERVAL)
+            interaction.guild.id, interaction.user.id, DAILY_AMOUNT,
+            DAILY_INTERVAL)
         if not claimed:
             hours, minutes = divmod(int(seconds_left) // 60, 60)
-            await ctx.send(DAILY_WAITING.format(hours=hours, minutes=minutes),
-                           ephemeral=True)
+            await interaction.response.send_message(
+                DAILY_WAITING.format(hours=hours, minutes=minutes),
+                ephemeral=True)
             return
-        await ctx.send(DAILY_CLAIMED.format(amount=DAILY_AMOUNT,
-                                            currency=CURRENCY_NAME,
-                                            balance=balance))
+        await interaction.response.send_message(DAILY_CLAIMED.format(
+            amount=DAILY_AMOUNT, currency=CURRENCY_NAME, balance=balance))
 
     # --------------------------------------------------------------- upgrade
     @app_commands.command(name="upgrade", description=UPGRADE_DESCRIPTION)
@@ -217,76 +219,74 @@ class Economy(commands.Cog):
             currency=CURRENCY_NAME, balance=balance))
 
     # ------------------------------------------------------------------ shop
-    @commands.hybrid_group(name="shop", description="Browse and buy shop items")
-    @commands.guild_only()
-    async def shop(self, ctx: commands.Context) -> None:
-        """Show the shop catalogue (same as `/shop list`)."""
-        await self.send_catalogue(ctx)
+    shop = app_commands.Group(name="shop",
+                              description="Browse and buy shop items",
+                              guild_only=True)
 
     @shop.command(name="list", description="Show everything that is for sale")
-    @commands.guild_only()
-    async def shop_list(self, ctx: commands.Context) -> None:
+    async def shop_list(self, interaction: discord.Interaction) -> None:
         """Show everything that is for sale."""
-        await self.send_catalogue(ctx)
+        await self.send_catalogue(interaction)
 
     @shop.command(name="buy", description="Buy an item from the shop")
-    @commands.guild_only()
-    async def shop_buy(self, ctx: commands.Context, item: str) -> None:
+    async def shop_buy(self, interaction: discord.Interaction,
+                       item: str) -> None:
         """Buy `item` (its code, e.g. `1x6`) with your coins."""
         shop_item, price, balance, order_id = await self.purchase(
-            ctx.guild, ctx.author, item)
-        await ctx.send(PURCHASE_MESSAGE.format(name=shop_item["name"],
-                                               price=price,
-                                               balance=balance,
-                                               order_id=order_id),
-                       ephemeral=True)
-        await self.notify_purchase(ctx.guild, ctx.author, shop_item, price,
-                                   order_id)
+            interaction.guild, interaction.user, item)
+        await interaction.response.send_message(PURCHASE_MESSAGE.format(
+            name=shop_item["name"], price=price, balance=balance,
+            order_id=order_id), ephemeral=True)
+        await self.notify_purchase(interaction.guild, interaction.user,
+                                   shop_item, price, order_id)
 
     @shop.command(name="orders", description="Show recent orders (staff)")
-    @commands.guild_only()
-    @commands.has_permissions(manage_guild=True)
-    async def shop_orders(self, ctx: commands.Context,
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def shop_orders(self, interaction: discord.Interaction,
                           pending_only: bool = False) -> None:
         """List recent orders; `pending_only` shows undelivered ones only."""
         rows = await get_recent_purchases(
-            ctx.guild.id, 10, PENDING_STATUS if pending_only else None)
+            interaction.guild.id, 10,
+            PENDING_STATUS if pending_only else None)
         if not rows:
-            await ctx.send(ORDERS_EMPTY, ephemeral=True)
+            await interaction.response.send_message(ORDERS_EMPTY,
+                                                    ephemeral=True)
             return
         lines = []
         for row in rows:
-            member = ctx.guild.get_member(row["user_id"])
+            member = interaction.guild.get_member(row["user_id"])
             mention = member.mention if member else f"<@{row['user_id']}>"
-            when = time.strftime(DATE_FORMAT, time.localtime(row["purchased_at"]))
+            when = time.strftime(DATE_FORMAT,
+                                 time.localtime(row["purchased_at"]))
             lines.append(ORDER_LINE.format(
                 order_id=row["purchase_id"], mention=mention,
                 name=row["item_name"] or row["item_code"], price=row["price"],
                 status=row["status"], when=when))
         embed = discord.Embed(title=ORDERS_TITLE, description="\n".join(lines),
                               color=discord.Color.dark_gold())
-        await ctx.send(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @shop.command(name="fulfil", description="Mark an order as delivered (staff)")
-    @commands.guild_only()
-    @commands.has_permissions(manage_guild=True)
-    async def shop_fulfil(self, ctx: commands.Context, order_id: int) -> None:
+    @shop.command(name="fulfil",
+                  description="Mark an order as delivered (staff)")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def shop_fulfil(self, interaction: discord.Interaction,
+                          order_id: int) -> None:
         """Mark order `order_id` as delivered."""
         # passing the guild id means a server can only touch its own orders
         if not await set_purchase_status(order_id, DELIVERED_STATUS,
-                                         ctx.guild.id):
-            await ctx.send(ORDER_NOT_FOUND.format(order_id=order_id),
-                           ephemeral=True)
+                                         interaction.guild.id):
+            await interaction.response.send_message(
+                ORDER_NOT_FOUND.format(order_id=order_id), ephemeral=True)
             return
-        await ctx.send(ORDER_UPDATED.format(order_id=order_id,
-                                            status=DELIVERED_STATUS))
+        await interaction.response.send_message(
+            ORDER_UPDATED.format(order_id=order_id, status=DELIVERED_STATUS))
 
     # ------------------------------------------------------------- internals
-    async def send_catalogue(self, ctx: commands.Context) -> None:
+    async def send_catalogue(self, interaction: discord.Interaction) -> None:
         """Post the list of active shop items."""
         items = await get_shop_items()
         if not items:
-            await ctx.send(SHOP_EMPTY)
+            await interaction.response.send_message(SHOP_EMPTY)
             return
         embed = discord.Embed(
             title=SHOP_TITLE,
@@ -296,8 +296,8 @@ class Economy(commands.Cog):
                                  description=item["description"])
                 for item in items),
             color=discord.Color.gold())
-        embed.set_footer(text=SHOP_FOOTER.format(prefix=ctx.clean_prefix or "/"))
-        await ctx.send(embed=embed)
+        embed.set_footer(text=SHOP_FOOTER.format(prefix="/"))
+        await interaction.response.send_message(embed=embed)
 
     async def purchase(self, guild: discord.Guild, member: discord.Member,
                        query: str) -> tuple:
@@ -341,14 +341,6 @@ class Economy(commands.Cog):
             pass  # the order is recorded, the log message is a bonus
 
     # ---------------------------------------------------------------- errors
-    async def cog_command_error(self, ctx: commands.Context,
-                                error: commands.CommandError) -> None:
-        """Handles failures of both the prefix and the slash invocation."""
-        text = await self.error_text(unwrap_error(error))
-        if text is None:
-            raise error
-        await ctx.send(text, ephemeral=True)
-
     async def cog_app_command_error(self, interaction: discord.Interaction,
                                     error: app_commands.AppCommandError) -> None:
         """Handles the application command errors the tree forwards to the cog."""

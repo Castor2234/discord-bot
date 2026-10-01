@@ -161,15 +161,23 @@ class Guild:
         return self.roles.get(role_id)
 
 
-class Ctx:
-    def __init__(self, guild, author):
-        self.guild = guild
-        self.author = author
-        self.clean_prefix = "!"
+class Response:
+    def __init__(self):
         self.sent = []
 
-    async def send(self, content=None, **kwargs):
-        self.sent.append((content, kwargs.get("embed")))
+    async def send_message(self, content=None, *, embed=None,
+                           ephemeral=False, **kwargs):
+        self.sent.append((content, embed))
+
+    def is_done(self):
+        return True
+
+
+class Interaction:
+    def __init__(self, guild, user):
+        self.guild = guild
+        self.user = user
+        self.response = Response()
 
 
 class Message:
@@ -185,7 +193,7 @@ class Bot(commands.Bot):
 
 
 def last(ctx):
-    content, embed = ctx.sent[-1]
+    content, embed = ctx.response.sent[-1]
     return embed if embed is not None else content
 
 
@@ -195,7 +203,7 @@ async def main():
     cog = lv.Levels(bot)
     guild = Guild()
     author = Member()
-    ctx = Ctx(guild, author)
+    ctx = Interaction(guild, author)
 
     # the settings of a server nobody configured yet
     settings = await cog.settings_for(GUILD_ID)

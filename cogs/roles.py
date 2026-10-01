@@ -308,20 +308,21 @@ class Roles(commands.Cog):
                           "%s in guild %s", dropped, role.id, role.guild.id)
 
     # ------------------------------------------------------------ validation
-    def check_role(self, ctx: commands.Context, role: discord.Role) -> None:
+    def check_role(self, interaction: discord.Interaction,
+                   role: discord.Role) -> None:
         """Refuse every role that nobody should be able to hand out."""
         if role.is_default():
             raise RoleSetupError(ROLE_EVERYONE)
         if role.managed:
             raise RoleSetupError(ROLE_MANAGED.format(role=role.name))
-        me = ctx.guild.me
+        me = interaction.guild.me
         if me is None or role >= me.top_role:
             raise RoleSetupError(ROLE_TOO_HIGH_BOT.format(role=role.name))
-        author = ctx.author
+        author = interaction.user
         if not isinstance(author, discord.Member):
             return
         privileged = (author.guild_permissions.administrator
-                      or ctx.guild.owner_id == author.id)
+                      or interaction.guild.owner_id == author.id)
         if REQUIRE_STAFF_OUTRANK and not privileged and role >= author.top_role:
             raise RoleSetupError(ROLE_TOO_HIGH_STAFF.format(role=role.name))
 
@@ -390,35 +391,31 @@ class Roles(commands.Cog):
                               message_id=row["message_id"])
 
     # ------------------------------------------------------------- commands
-    @commands.hybrid_group(name="rolemenu",
-                           brief="Manage the reaction role menus")
-    @commands.guild_only()
-    @commands.has_permissions(manage_guild=True)
-    async def rolemenu(self, ctx: commands.Context) -> None:
-        """Build and maintain the reaction role menus of this server."""
-        await ctx.send_help(ctx.command)
+    rolemenu = app_commands.Group(
+        name="rolemenu", description="Manage the reaction role menus",
+        guild_only=True,
+        default_permissions=discord.Permissions(manage_guild=True))
 
     @rolemenu.command(name="add",
                       description="Map an emoji of a message to a role")
-    @commands.guild_only()
-    @commands.has_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)
     @app_commands.describe(
         message="Message link (the safe one) or the message ID",
         emoji="Emoji to react with, e.g. \u2705 or <:name:id>",
         role="Role that this reaction grants",
         channel="Channel of that message, only needed for a bare ID",
     )
-    async def rolemenu_add(self, ctx: commands.Context, message: str,
-                           emoji: str, role: discord.Role,
+    async def rolemenu_add(self, interaction: discord.Interaction,
+                           message: str, emoji: str, role: discord.Role,
                            channel: Optional[discord.TextChannel] = None) -> None:
         """Map `emoji` on `message` to `role` and react with it."""
-        guild = ctx.guild
+        guild = interaction.guild
         target, message_id = await self.resolve_target(guild, message, channel)
         parsed = parse_emoji(emoji) or guild_emoji_by_name(guild, emoji)
         if parsed is None:
             raise RoleSetupError(EMOJI_INVALID.format(emoji=emoji))
         key = reaction_key(parsed)
-        self.check_role(ctx, role)
+        self.check_role(interaction, role)
 
         missing = self.missing_permissions(target)
         if missing:
@@ -432,7 +429,7 @@ class Roles(commands.Cog):
             raise RoleSetupError(MENU_FULL.format(limit=MAX_OPTIONS_PER_MENU))
 
         await add_reaction_role(guild.id, target.id, message_id, key, role.id,
-                                ctx.author.id)
+                                interaction.user.id)
         try:
             await menu_message.add_reaction(emoji_from_key(key))
         except discord.HTTPException as error:
@@ -444,85 +441,84 @@ class Roles(commands.Cog):
         url = JUMP_URL.format(guild_id=guild.id, channel_id=target.id,
                               message_id=message_id)
         if old is None:
-            await ctx.send(MENU_ADDED.format(emoji=render_key(key), url=url,
-                                             role=role.name), ephemeral=True)
+            await interaction.response.send_message(MENU_ADDED.format(
+                emoji=render_key(key), url=url, role=role.name), ephemeral=True)
             return
         previous = guild.get_role(old["role_id"])
-        await ctx.send(MENU_UPDATED.format(
+        await interaction.response.send_message(MENU_UPDATED.format(
             emoji=render_key(key), url=url, role=role.name,
             old=previous.name if previous else MENU_MISSING_ROLE), ephemeral=True)
 
     @rolemenu.command(name="remove",
                       description="Unmap a single emoji of a message")
-    @commands.guild_only()
-    @commands.has_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)
     @app_commands.describe(message="Message link or message ID",
                            emoji="Emoji that should stop granting a role")
-    async def rolemenu_remove(self, ctx: commands.Context, message: str,
-                              emoji: str) -> None:
+    async def rolemenu_remove(self, interaction: discord.Interaction,
+                              message: str, emoji: str) -> None:
         """Stop mapping `emoji` of `message` to a role."""
         message_id = parse_message_ref(message)[1]
-        parsed = parse_emoji(emoji) or guild_emoji_by_name(ctx.guild, emoji)
+        parsed = (parse_emoji(emoji)
+                  or guild_emoji_by_name(interaction.guild, emoji))
         if parsed is None:
             raise RoleSetupError(EMOJI_INVALID.format(emoji=emoji))
         key = reaction_key(parsed)
         row = await get_reaction_role(message_id, key)
-        if row is None or row["guild_id"] != ctx.guild.id:
-            await ctx.send(MENU_NOT_MAPPED.format(emoji=render_key(key)),
-                           ephemeral=True)
+        if row is None or row["guild_id"] != interaction.guild.id:
+            await interaction.response.send_message(
+                MENU_NOT_MAPPED.format(emoji=render_key(key)), ephemeral=True)
             return
         await delete_reaction_role(message_id, key)
-        await ctx.send(MENU_REMOVED.format(emoji=render_key(key),
-                                          url=self.menu_url(row)),
-                       ephemeral=True)
+        await interaction.response.send_message(
+            MENU_REMOVED.format(emoji=render_key(key), url=self.menu_url(row)),
+            ephemeral=True)
 
     @rolemenu.command(name="clear",
                       description="Unmap a whole menu message")
-    @commands.guild_only()
-    @commands.has_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)
     @app_commands.describe(message="Message link or message ID")
-    async def rolemenu_clear(self, ctx: commands.Context,
+    async def rolemenu_clear(self, interaction: discord.Interaction,
                              message: str) -> None:
         """Drop every mapping of `message`, the reactions stay untouched."""
         message_id = parse_message_ref(message)[1]
         menu = await get_reaction_menu(message_id)
-        if not menu or menu[0]["guild_id"] != ctx.guild.id:
-            await ctx.send(MENU_EMPTY, ephemeral=True)
+        if not menu or menu[0]["guild_id"] != interaction.guild.id:
+            await interaction.response.send_message(MENU_EMPTY, ephemeral=True)
             return
         url = self.menu_url(menu[0])
         count = await delete_reaction_menu(message_id)
-        await ctx.send(MENU_CLEARED.format(count=count, url=url), ephemeral=True)
+        await interaction.response.send_message(
+            MENU_CLEARED.format(count=count, url=url), ephemeral=True)
 
     @rolemenu.command(name="show",
                       description="Show the mapping of one menu message")
-    @commands.guild_only()
-    @commands.has_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)
     @app_commands.describe(message="Message link or message ID")
-    async def rolemenu_show(self, ctx: commands.Context,
+    async def rolemenu_show(self, interaction: discord.Interaction,
                             message: str) -> None:
         """List every emoji of `message` and the role behind it."""
-        guild = ctx.guild
+        guild = interaction.guild
         message_id = parse_message_ref(message)[1]
         menu = await get_reaction_menu(message_id)
         if not menu or menu[0]["guild_id"] != guild.id:
-            await ctx.send(MENU_EMPTY, ephemeral=True)
+            await interaction.response.send_message(MENU_EMPTY, ephemeral=True)
             return
         lines = [MENU_SHOW_TITLE.format(url=self.menu_url(menu[0]),
                                        count=len(menu))]
         lines += [f"{render_key(row['emoji'])} \u2192 "
                   f"{self.role_text(guild, row)}" for row in menu]
-        await ctx.send("\n".join(lines), ephemeral=True)
+        await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
     @rolemenu.command(name="list",
                       description="List every reaction role menu")
-    @commands.guild_only()
-    @commands.has_permissions(manage_guild=True)
-    async def rolemenu_list(self, ctx: commands.Context) -> None:
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def rolemenu_list(self, interaction: discord.Interaction) -> None:
         """Show every menu of this server with its emoji to role pairs."""
-        guild = ctx.guild
+        guild = interaction.guild
         rows = await get_reaction_menus(guild.id)
         if not rows:
-            await ctx.send(MENU_LIST_EMPTY, ephemeral=True)
+            await interaction.response.send_message(MENU_LIST_EMPTY,
+                                                    ephemeral=True)
             return
         menus: dict[int, list] = {}
         for row in rows:
@@ -537,7 +533,7 @@ class Roles(commands.Cog):
             lines.append(MENU_LIST_LINE.format(
                 channel_id=menu[0]["channel_id"], url=self.menu_url(menu[0]),
                 options=options))
-        await ctx.send("\n".join(lines), ephemeral=True)
+        await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
     @staticmethod
     def role_text(guild: discord.Guild, row) -> str:
@@ -554,11 +550,10 @@ class Roles(commands.Cog):
 
     @rolemenu.command(name="take",
                       description="Take a role away from a member")
-    @commands.guild_only()
-    @commands.has_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)
     @app_commands.describe(member="Member to revoke the role from",
                            role="Role to take away")
-    async def rolemenu_take(self, ctx: commands.Context,
+    async def rolemenu_take(self, interaction: discord.Interaction,
                             member: discord.Member,
                             role: discord.Role) -> None:
         """Remove `role` from `member`.
@@ -566,30 +561,25 @@ class Roles(commands.Cog):
         Granting is add-only, so this is the way back: the reaction of the
         member is left alone and reacting again hands the role right back.
         """
-        self.check_role(ctx, role)
+        self.check_role(interaction, role)
         if role not in member.roles:
-            await ctx.send(ROLE_NOT_HELD.format(member=member.mention,
-                                                role=role.name), ephemeral=True)
+            await interaction.response.send_message(
+                ROLE_NOT_HELD.format(member=member.mention, role=role.name),
+                ephemeral=True)
             return
         try:
             await member.remove_roles(role, reason=REVOKE_REASON)
         except discord.HTTPException as error:
             raise RoleSetupError(REVOKE_FAILED.format(
                 role=role.name, reason=http_reason(error))) from error
-        self.log.info("%s took role %s from %s in guild %s", ctx.author.id,
-                      role.id, member.id, ctx.guild.id)
-        await ctx.send(ROLE_TAKEN.format(role=role.name, member=member.mention),
-                       ephemeral=True)
+        self.log.info("%s took role %s from %s in guild %s",
+                      interaction.user.id, role.id, member.id,
+                      interaction.guild.id)
+        await interaction.response.send_message(
+            ROLE_TAKEN.format(role=role.name, member=member.mention),
+            ephemeral=True)
 
     # ---------------------------------------------------------------- errors
-    async def cog_command_error(self, ctx: commands.Context,
-                                error: commands.CommandError) -> None:
-        """Handles failures of both the prefix and the slash invocation."""
-        text = await self.error_text(unwrap_error(error))
-        if text is None:
-            raise error
-        await ctx.send(text, ephemeral=True)
-
     async def cog_app_command_error(self, interaction: discord.Interaction,
                                     error: app_commands.AppCommandError) -> None:
         """Handles the application command errors the tree forwards to the cog."""
