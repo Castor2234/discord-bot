@@ -3,13 +3,14 @@ from discord.ext import commands
 from dotenv import load_dotenv
 import logging
 from db import init_db
-import asyncio
+import asyncio, json
 
 load_dotenv()
 token = os.getenv('DISCORD_TOKEN')
 guild_id = int(os.getenv('GUILD_ID'))
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+RESTART_FILE = os.path.join(BASE_DIR, "restart.json")
 
 COGS = ("cogs.levels", "cogs.economy", "cogs.roles")
 
@@ -35,6 +36,17 @@ async def setup_hook():
 @bot.event
 async def on_ready():
     print(f"{bot.user.name} готов")
+
+    if os.path.exists(RESTART_FILE):
+        try:
+            with open(RESTART_FILE) as f:
+                channel_id = json.load(f)["channel_id"]
+            channel = bot.get_channel(channel_id) or await bot.fetch_channel(channel_id)
+            await channel.send(f"{bot.user.name} снова запущен")
+        except Exception as error:
+            print(f"Не смог отправить сообщние. Ошибка: {error!r}")
+        finally:
+            os.remove(RESTART_FILE)
 
 @bot.command()
 @commands.has_permissions(administrator = True)
@@ -79,7 +91,9 @@ async def gitpull(ctx):
 @bot.command()
 @commands.is_owner()
 async def restart(ctx):
-    await ctx.send("Restarting...")
+    await ctx.send("Перезапуск...")
+    with open(RESTART_FILE, "w") as f:
+        json.dump({"channel_id": ctx.channel.id}, f)
     await bot.close()
 
 

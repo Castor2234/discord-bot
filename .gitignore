@@ -220,3 +220,5 @@ __marimo__/
 # Local SQLite state of the bot (xp, balances, reaction role menus) holds user
 # data and must never be committed
 *.db
+
+restart.json
