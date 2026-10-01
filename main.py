@@ -76,20 +76,11 @@ async def gitpull(ctx):
     text = out.decode("utf-8", errors="replace").strip() or "(no output)"
     await ctx.send(f"```\n{text[:1900]}\n```")
 
-
 @bot.command()
 @commands.is_owner()
-async def reload(ctx):
-    """Reload all cogs (use after gitpull)."""
-    for cog in COGS:
-        try:
-            await bot.reload_extension(cog)
-        except commands.ExtensionNotLoaded:
-            await bot.load_extension(cog)
-        except Exception as error:
-            await ctx.send(f"{cog} failed: `{error!r}`")
-            return
-    await ctx.send("Cogs reloaded.")
+async def restart(ctx):
+    await ctx.send("Restarting...")
+    await bot.close()
 
 
 bot.run(token, log_handler=handler, log_level=logging.INFO)
