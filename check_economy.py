@@ -6,6 +6,9 @@ Covers the bet added to /roll - the default (5), the hard cap (100) and that
 exactly the amount the caller passed is what reaches the wallet and the answer -
 plus the staff commands that manage the catalogue: /shop add, setprice, hide and
 restore, including the `active` flag that takes an item off the shelf.
+The /transfer command is checked too: the 1-100 amount range, the 60 s
+cooldown, that both wallets move together and that a refusal (to yourself, to a
+bot, with an empty wallet) changes nothing.
 Everything runs against a throwaway database in the temp folder, so the real
 bot.db is never touched.
 """
@@ -27,6 +30,7 @@ db.DB_PATH = DB_PATH
 
 GUILD_ID = 1554266264149696573
 USER_ID = 777
+FRIEND_ID = 888
 
 failures = []
 
@@ -50,9 +54,10 @@ class Rigged:
 
 
 class User:
-    def __init__(self):
-        self.id = USER_ID
-        self.mention = f"<@{USER_ID}>"
+    def __init__(self, user_id=USER_ID, bot=False):
+        self.id = user_id
+        self.mention = f"<@{user_id}>"
+        self.bot = bot
 
 
 class Guild:
@@ -71,9 +76,9 @@ class Response:
 
 
 class Interaction:
-    def __init__(self):
+    def __init__(self, user_id=USER_ID):
         self.guild = Guild()
-        self.user = User()
+        self.user = User(user_id)
         self.response = Response()
 
 
@@ -161,6 +166,99 @@ async def main():
     except ec.InsufficientFunds as error:
         check("poor user refused", error.price, ec.ROLL_DEFAULT_BET)
     check("nothing taken on a refusal", await balance(), 0)
+
+    # ------------------------------------------------------ /transfer shape
+    command = bot.tree.get_command("transfer")
+    params = {param.name: param for param in command.parameters}
+    check("transfer asks for member and amount", sorted(params),
+          ["amount", "member"])
+    check("member is required", params["member"].required, True)
+    check("amount is required", params["amount"].required, True)
+    check("amount range", (params["amount"].min_value, params["amount"].max_value),
+          (1, ec.TRANSFER_MAX_AMOUNT))
+    check("amount max is 100", ec.TRANSFER_MAX_AMOUNT, 100)
+    check("transfer cooldown is 60 s", ec.TRANSFER_COOLDOWN, 60.0)
+    check("transfer is gated by a cooldown", bool(command.checks), True)
+
+    # --------------------------------------------------------- the coins move
+    friend = User(FRIEND_ID)
+    await db.add_balance(GUILD_ID, USER_ID, 100)
+
+    async def friend_balance():
+        return (await db.get_user(GUILD_ID, FRIEND_ID))["balance"]
+
+    await cog.transfer.callback(cog, interaction, friend, ec.TRANSFER_MAX_AMOUNT)
+    check("transfer message", last(interaction), ec.TRANSFER_SENT.format(
+        sender=f"<@{USER_ID}>", receiver=f"<@{FRIEND_ID}>",
+        amount=ec.TRANSFER_MAX_AMOUNT, balance=100,
+        currency=ec.CURRENCY_NAME))
+    check("sender paid 100", await balance(), 0)
+    check("receiver got 100", await friend_balance(), 100)
+
+    # the db records both sides of the move, so the log matches the wallets
+    sent = await db.get_transactions(GUILD_ID, USER_ID, 1)
+    check("the payer is logged as spent", [row["amount"] for row in sent], [-100])
+    check("the payer sees the receiver",
+          [row["other_user_id"] for row in sent], [FRIEND_ID])
+    received = await db.get_transactions(GUILD_ID, FRIEND_ID, 1)
+    check("the receiver is logged as gained",
+          [row["amount"] for row in received], [100])
+    check("the receiver sees the payer",
+          [row["other_user_id"] for row in received], [USER_ID])
+
+    # a second transfer moves the very same amount again
+    await db.add_balance(GUILD_ID, USER_ID, 30)
+    await cog.transfer.callback(cog, interaction, friend, 7)
+    check("small transfer message", last(interaction), ec.TRANSFER_SENT.format(
+        sender=f"<@{USER_ID}>", receiver=f"<@{FRIEND_ID}>", amount=7,
+        balance=107, currency=ec.CURRENCY_NAME))
+    check("sender paid 7 of 30", await balance(), 23)
+    check("receiver got 7 more", await friend_balance(), 107)
+    check("the second transfer is logged too",
+          [row["amount"] for row in await db.get_transactions(GUILD_ID, USER_ID, 1)],
+          [-7])
+
+    # -------------------------------------------------------------- refusals
+    async def refused(name, member, amount, want):
+        try:
+            await cog.transfer.callback(cog, interaction, member, amount)
+            check(name, "no error", want)
+        except ec.TransferError as error:
+            check(name, error.text, want)
+
+    # to yourself: nothing moves
+    await refused("self transfer refused", interaction.user, 5, ec.TRANSFER_SELF)
+    # to a bot: nothing moves
+    await refused("bot receiver refused", User(FRIEND_ID, bot=True), 5,
+                  ec.TRANSFER_NOT_FOR_BOTS)
+    # more than the sender's wallet holds: nothing moves
+    await refused("poor sender refused", friend, 1000,
+                  ec.TRANSFER_INSUFFICIENT.format(missing=1000 - 23, amount=1000,
+                                                  balance=23,
+                                                  currency=ec.CURRENCY_NAME))
+    check("a refusal takes nothing", (await balance(), await friend_balance()),
+          (23, 107))
+
+    # a bad amount is caught by the db even if the range were bypassed
+    await refused("zero amount refused", friend, 0,
+                  ec.TRANSFER_BAD_AMOUNT.format(max=ec.TRANSFER_MAX_AMOUNT))
+    check("a bad amount takes nothing", await friend_balance(), 107)
+
+    # the error handler turns the exception into exactly that text
+    check("error_text of a refusal",
+          await cog.error_text(ec.TransferError(ec.TRANSFER_SELF)),
+          ec.TRANSFER_SELF)
+    check("error_text of a cooldown",
+          await cog.error_text(
+              discord.app_commands.CommandOnCooldown(None, 12.4)),
+          ec.COOLDOWN_MESSAGE.format(seconds=12))
+
+    # the feature flag closes the command without touching the wallets
+    ec.TRANSFER_ENABLED = False
+    await cog.transfer.callback(cog, interaction, friend, 1)
+    check("disabled transfer answer", last(interaction), ec.TRANSFER_DISABLED)
+    check("a disabled transfer takes nothing", await friend_balance(), 107)
+    ec.TRANSFER_ENABLED = True
 
     # ------------------------------------------------ the staff shop commands
     group = bot.tree.get_command("shop")

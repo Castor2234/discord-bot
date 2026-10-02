@@ -1,7 +1,8 @@
-"""Economy cog: coins, the daily reward, the shop and the /roll gamble.
+"""Economy cog: coins, the daily reward, the shop, /roll and /transfer.
 
 Coins live in the users.balance column (see db.py), so the levels cog pays
-into the same wallet that is spent here.
+into the same wallet that is spent here. Both wallets of a transfer change in
+one db transaction (db.transfer), so coins can never be taken and lost.
 """
 
 import logging
@@ -28,6 +29,7 @@ from db import (
     restore_shop_item,
     set_purchase_status,
     set_shop_item_price,
+    transfer as transfer_coins,   # the command is called transfer as well
 )
 
 # ------------------------------------------------------------------ settings
@@ -49,6 +51,12 @@ ROLL_DEFAULT_BET = 5
 ROLL_MAX_BET = 100
 ROLL_WIN_CHANCE = 0.5
 ROLL_COOLDOWN = 3.0                   # seconds between two tries of one member
+
+# /transfer: hand up to TRANSFER_MAX_AMOUNT coins to another member, no more
+# often than once every TRANSFER_COOLDOWN seconds
+TRANSFER_ENABLED = True
+TRANSFER_MAX_AMOUNT = 100             # largest single /transfer
+TRANSFER_COOLDOWN = 60.0              # seconds between two transfers
 
 # user facing texts
 BALANCE_MESSAGE = "Баланс пользователя {mention}: **{balance}** {currency}."
@@ -89,7 +97,18 @@ ROLL_WIN = ("🎉 {mention} рискнул {bet} {currency} и **удвоил**!
 ROLL_LOSE = ("💥 {mention} рискнул {bet} {currency} и **проиграл**. "
                 "Потеряно: **-{bet}** {currency}. Баланс: **{balance}** {currency}.")
 ROLL_DISABLED = "Улучшение отключено."
-ROLL_COOLDOWN_MESSAGE = "Не так быстро! Попробуй ещё раз через **{seconds}** с."
+COOLDOWN_MESSAGE = "Не так быстро! Попробуй ещё раз через **{seconds}** с."
+TRANSFER_DESCRIPTION = f"Передать манго другому участнику (1-{TRANSFER_MAX_AMOUNT})"
+TRANSFER_MEMBER = "Кому перевести"
+TRANSFER_AMOUNT = f"Сколько манго перевести (1-{TRANSFER_MAX_AMOUNT})"
+TRANSFER_SENT = ("✅ {sender} перевёл **{amount}** {currency} игроку {receiver}. "
+                 "Баланс получателя: **{balance}** {currency}.")
+TRANSFER_DISABLED = "Переводы отключены."
+TRANSFER_SELF = "Нельзя перевести манго самому себе."
+TRANSFER_BAD_AMOUNT = "Сумма перевода должна быть от 1 до {max}."
+TRANSFER_INSUFFICIENT = ("Не хватает ещё **{missing}** {currency} "
+                         "(перевод **{amount}**, баланс **{balance}**).")
+TRANSFER_NOT_FOR_BOTS = "Ботам нельзя переводить монеты."
 ADMIN_MAX_AMOUNT = 1_000_000             # largest single /addcoins or /removecoins
 ADMIN_ADDED = "✅ {mention} получает **{amount}** {currency}. Баланс: **{balance}** {currency}."
 ADMIN_REMOVED = "✅ У {mention} снято **{removed}** {currency}. Баланс: **{balance}** {currency}."
@@ -126,8 +145,16 @@ class ItemNotFound(commands.CommandError):
         super().__init__(f"unknown shop item {query!r}")
 
 
+class TransferError(commands.CommandError):
+    """Raised when a transfer cannot go through; carries the answer to send."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        super().__init__(text)
+
+
 class Economy(commands.Cog):
-    """Coins, the daily reward, the shop and /roll."""
+    """Coins, the daily reward, the shop, /roll and /transfer."""
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
@@ -192,6 +219,21 @@ class Economy(commands.Cog):
         await interaction.response.send_message(template.format(
             mention=interaction.user.mention, bet=bet,
             currency=CURRENCY_NAME, balance=balance))
+
+    # ------------------------------------------------------------- transfer
+    @app_commands.command(name="transfer", description=TRANSFER_DESCRIPTION)
+    @app_commands.guild_only()
+    @app_commands.checks.cooldown(1, TRANSFER_COOLDOWN)
+    @app_commands.describe(member=TRANSFER_MEMBER, amount=TRANSFER_AMOUNT)
+    async def transfer(
+            self, interaction: discord.Interaction, member: discord.Member,
+            amount: app_commands.Range[int, 1, TRANSFER_MAX_AMOUNT]) -> None:
+        """Hand `amount` coins from your wallet to `member`."""
+        if not TRANSFER_ENABLED:
+            await interaction.response.send_message(TRANSFER_DISABLED,
+                                                    ephemeral=True)
+            return
+        await self.send_coins(interaction, interaction.user, member, amount)
 
     # ----------------------------------------------------------------- admin
     @app_commands.command(name="addcoins",
@@ -393,6 +435,42 @@ class Economy(commands.Cog):
             ephemeral=True)
 
     # ------------------------------------------------------------- internals
+    async def send_coins(self, interaction: discord.Interaction,
+                         sender: discord.Member, receiver: discord.Member,
+                         amount: int) -> None:
+        """Move `amount` coins from `sender` to `receiver` in ONE transaction.
+
+        Raises TransferError so the command layer stays free of branch logic;
+        `cog_app_command_error` turns it into the reply.
+        """
+        if receiver.bot:
+            raise TransferError(TRANSFER_NOT_FOR_BOTS)
+        # the db settles both wallets and writes the log atomically, so a crash
+        # can never take the coins without giving them
+        status = await transfer_coins(interaction.guild.id, sender.id,
+                                      receiver.id, amount)
+        if status != "ok":
+            raise TransferError(await self.transfer_refusal(
+                interaction, status, amount))
+        balance = (await get_user(interaction.guild.id, receiver.id))["balance"]
+        await interaction.response.send_message(TRANSFER_SENT.format(
+            sender=sender.mention, receiver=receiver.mention, amount=amount,
+            currency=CURRENCY_NAME, balance=balance))
+
+    async def transfer_refusal(self, interaction: discord.Interaction,
+                               status: str, amount: int) -> str:
+        """Why db.transfer answered `status`, in the user's words."""
+        if status == "self":
+            return TRANSFER_SELF
+        if status == "invalid_amount":
+            return TRANSFER_BAD_AMOUNT.format(max=TRANSFER_MAX_AMOUNT)
+        # "insufficient": name the missing part, the way the shop does
+        balance = (await get_user(interaction.guild.id,
+                                  interaction.user.id))["balance"]
+        return TRANSFER_INSUFFICIENT.format(missing=amount - balance,
+                                            amount=amount, balance=balance,
+                                            currency=CURRENCY_NAME)
+
     async def send_catalogue(self, interaction: discord.Interaction) -> None:
         """Post the list of active shop items."""
         items = await get_shop_items()
@@ -476,9 +554,11 @@ class Economy(commands.Cog):
             items = await get_shop_items()
             available = ", ".join(f"`{item['code']}`" for item in items) or "-"
             return ITEM_NOT_FOUND.format(query=error.query, available=available)
+        if isinstance(error, TransferError):
+            return error.text
         # must come before the CheckFailure branch: a cooldown is a CheckFailure
         if isinstance(error, app_commands.CommandOnCooldown):
-            return ROLL_COOLDOWN_MESSAGE.format(
+            return COOLDOWN_MESSAGE.format(
                 seconds=max(1, round(error.retry_after)))
         if isinstance(error, (commands.MissingPermissions, commands.CheckFailure,
                               app_commands.CheckFailure)):
