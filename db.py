@@ -139,6 +139,14 @@ async def init_db():
                 PRIMARY KEY (guild_id, role_id)
             )""")
 
+        # the channels the bot is allowed to answer commands in; an empty
+        # table means the rule is off and every channel is allowed
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS command_channels (
+                guild_id INTEGER NOT NULL, channel_id INTEGER NOT NULL,
+                PRIMARY KEY (guild_id, channel_id)
+            )""")
+
         # seeding by the unique code keeps this idempotent and never
         # overwrites a price that was changed later
         await db.execute(
@@ -909,6 +917,47 @@ async def add_ignored_role(guild_id, role_id):
     """Stop XP for a role. False when it was ignored already."""
     return await _add_ignored("ignored_roles", "role_id", guild_id, role_id)
 
+
+
+
+# --------------------------------------------------------------------------
+# Command channels
+#
+# The allow list of the channels the bot answers commands in. An empty set
+# means the rule is off: the bot answers everywhere, so a server that never
+# picked a channel keeps working exactly as before.
+# --------------------------------------------------------------------------
+
+async def list_command_channels(guild_id):
+    """Channels the bot may answer commands in. Empty = the rule is off."""
+    return await _list_ignored("command_channels", "channel_id", guild_id)
+
+
+async def add_command_channel(guild_id, channel_id):
+    """Let the bot answer commands in a channel. False when it already could."""
+    return await _add_ignored("command_channels", "channel_id",
+                              guild_id, channel_id)
+
+
+async def remove_command_channel(guild_id, channel_id):
+    """Stop answering commands in a channel. False when it was not allowed.
+
+    Also call this from `on_guild_channel_delete` to drop stale ids.
+    """
+    return await _remove_ignored("command_channels", "channel_id",
+                                 guild_id, channel_id)
+
+
+async def clear_command_channels(guild_id):
+    """Forget the whole allow list, which turns the rule off again.
+
+    Returns how many channels were dropped.
+    """
+    async with _connect() as db:
+        cursor = await db.execute(
+            "DELETE FROM command_channels WHERE guild_id=?", (guild_id,))
+        await db.commit()
+        return cursor.rowcount
 
 async def remove_ignored_role(guild_id, role_id):
     """Let a role earn XP again. False when it was not ignored.
