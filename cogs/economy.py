@@ -46,7 +46,7 @@ DELIVERED_STATUS = "delivered"
 # with ROLL_WIN_CHANCE, otherwise lose it
 ROLL_ENABLED = True
 ROLL_DEFAULT_BET = 5
-ROLL_MAX_BET = 500
+ROLL_MAX_BET = 100
 ROLL_WIN_CHANCE = 0.5
 ROLL_COOLDOWN = 3.0                   # seconds between two tries of one member
 
