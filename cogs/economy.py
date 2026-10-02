@@ -1,4 +1,4 @@
-"""Economy cog: coins, the daily reward, the shop and the /upgrade gamble.
+"""Economy cog: coins, the daily reward, the shop and the /roll gamble.
 
 Coins live in the users.balance column (see db.py), so the levels cog pays
 into the same wallet that is spent here.
@@ -42,13 +42,13 @@ DAILY_INTERVAL = 24 * 3600               # seconds between two claims
 PENDING_STATUS = "pending"
 DELIVERED_STATUS = "delivered"
 
-# /upgrade: bet UPGRADE_DEFAULT_BET (up to UPGRADE_MAX_BET), win it once more
-# with UPGRADE_WIN_CHANCE, otherwise lose it
-UPGRADE_ENABLED = True
-UPGRADE_DEFAULT_BET = 5
-UPGRADE_MAX_BET = 500
-UPGRADE_WIN_CHANCE = 0.5
-UPGRADE_COOLDOWN = 3.0                   # seconds between two tries of one member
+# /roll: bet ROLL_DEFAULT_BET (up to ROLL_MAX_BET), win it once more
+# with ROLL_WIN_CHANCE, otherwise lose it
+ROLL_ENABLED = True
+ROLL_DEFAULT_BET = 5
+ROLL_MAX_BET = 500
+ROLL_WIN_CHANCE = 0.5
+ROLL_COOLDOWN = 3.0                   # seconds between two tries of one member
 
 # user facing texts
 BALANCE_MESSAGE = "Баланс пользователя {mention}: **{balance}** {currency}."
@@ -81,15 +81,15 @@ ORDER_NOT_FOUND = "Заказа **#{order_id}** не существует."
 DAILY_CLAIMED = "<:pudge:1554517617434296320> Ежедневная награда получена: **{amount}** {currency}. Баланс: **{balance}** {currency}."
 DAILY_WAITING = "Вы уже забрали ежедневную награду. Вернитесь спустя **{hours}ч {minutes}м**."
 DAILY_DISABLED = "Ежедневная награда отключена."
-UPGRADE_DESCRIPTION = (f"Рискни манго: "
-                       f"{UPGRADE_WIN_CHANCE:.0%} удвоить, иначе потерять")
-UPGRADE_BET = f"Сколько манго поставить (1-{UPGRADE_MAX_BET})"
-UPGRADE_WIN = ("🎉 {mention} рискнул {bet} {currency} и **удвоил**! "
+ROLL_DESCRIPTION = (f"Рискни манго: "
+                       f"{ROLL_WIN_CHANCE:.0%} удвоить, иначе потерять")
+ROLL_BET = f"Сколько манго поставить (1-{ROLL_MAX_BET})"
+ROLL_WIN = ("🎉 {mention} рискнул {bet} {currency} и **удвоил**! "
                "Выигрыш: **+{bet}** {currency}. Баланс: **{balance}** {currency}.")
-UPGRADE_LOSE = ("💥 {mention} рискнул {bet} {currency} и **проиграл**. "
+ROLL_LOSE = ("💥 {mention} рискнул {bet} {currency} и **проиграл**. "
                 "Потеряно: **-{bet}** {currency}. Баланс: **{balance}** {currency}.")
-UPGRADE_DISABLED = "Улучшение отключено."
-UPGRADE_COOLDOWN_MESSAGE = "Не так быстро! Попробуй ещё раз через **{seconds}** с."
+ROLL_DISABLED = "Улучшение отключено."
+ROLL_COOLDOWN_MESSAGE = "Не так быстро! Попробуй ещё раз через **{seconds}** с."
 ADMIN_MAX_AMOUNT = 1_000_000             # largest single /addcoins or /removecoins
 ADMIN_ADDED = "✅ {mention} получает **{amount}** {currency}. Баланс: **{balance}** {currency}."
 ADMIN_REMOVED = "✅ У {mention} снято **{removed}** {currency}. Баланс: **{balance}** {currency}."
@@ -127,7 +127,7 @@ class ItemNotFound(commands.CommandError):
 
 
 class Economy(commands.Cog):
-    """Coins, the daily reward, the shop and /upgrade."""
+    """Coins, the daily reward, the shop and /roll."""
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
@@ -170,25 +170,25 @@ class Economy(commands.Cog):
         await interaction.response.send_message(DAILY_CLAIMED.format(
             amount=DAILY_AMOUNT, currency=CURRENCY_NAME, balance=balance))
 
-    # --------------------------------------------------------------- upgrade
-    @app_commands.command(name="upgrade", description=UPGRADE_DESCRIPTION)
+    # --------------------------------------------------------------- roll
+    @app_commands.command(name="roll", description=ROLL_DESCRIPTION)
     @app_commands.guild_only()
-    @app_commands.checks.cooldown(1, UPGRADE_COOLDOWN)
-    @app_commands.describe(bet=UPGRADE_BET)
-    async def upgrade(self, interaction: discord.Interaction,
-                      bet: app_commands.Range[int, 1, UPGRADE_MAX_BET]
-                      = UPGRADE_DEFAULT_BET) -> None:
+    @app_commands.checks.cooldown(1, ROLL_COOLDOWN)
+    @app_commands.describe(bet=ROLL_BET)
+    async def roll(self, interaction: discord.Interaction,
+                      bet: app_commands.Range[int, 1, ROLL_MAX_BET]
+                      = ROLL_DEFAULT_BET) -> None:
         """Risk `bet` coins: double them or lose them."""
-        if not UPGRADE_ENABLED:
-            await interaction.response.send_message(UPGRADE_DISABLED,
+        if not ROLL_ENABLED:
+            await interaction.response.send_message(ROLL_DISABLED,
                                                     ephemeral=True)
             return
-        won = _rng.random() < UPGRADE_WIN_CHANCE
+        won = _rng.random() < ROLL_WIN_CHANCE
         played, balance = await gamble(interaction.guild.id,
                                        interaction.user.id, bet, won)
         if not played:
             raise InsufficientFunds(bet, balance)
-        template = UPGRADE_WIN if won else UPGRADE_LOSE
+        template = ROLL_WIN if won else ROLL_LOSE
         await interaction.response.send_message(template.format(
             mention=interaction.user.mention, bet=bet,
             currency=CURRENCY_NAME, balance=balance))
@@ -478,7 +478,7 @@ class Economy(commands.Cog):
             return ITEM_NOT_FOUND.format(query=error.query, available=available)
         # must come before the CheckFailure branch: a cooldown is a CheckFailure
         if isinstance(error, app_commands.CommandOnCooldown):
-            return UPGRADE_COOLDOWN_MESSAGE.format(
+            return ROLL_COOLDOWN_MESSAGE.format(
                 seconds=max(1, round(error.retry_after)))
         if isinstance(error, (commands.MissingPermissions, commands.CheckFailure,
                               app_commands.CheckFailure)):

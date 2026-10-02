@@ -1,8 +1,8 @@
-"""Offline checks for the economy cog: the /upgrade bet and the staff shop tools.
+"""Offline checks for the economy cog: the /roll bet and the staff shop tools.
 
 Run with:  python check_economy.py   (prints "ALL GOOD" and exits 0 when green)
 
-Covers the bet added to /upgrade - the default (5), the hard cap (100) and that
+Covers the bet added to /roll - the default (5), the hard cap (100) and that
 exactly the amount the caller passed is what reaches the wallet and the answer -
 plus the staff commands that manage the catalogue: /shop add, setprice, hide and
 restore, including the `active` flag that takes an item off the shelf.
@@ -88,12 +88,12 @@ def last(interaction):
 
 
 def win_text(bet, balance):
-    return ec.UPGRADE_WIN.format(mention=f"<@{USER_ID}>", bet=bet,
+    return ec.ROLL_WIN.format(mention=f"<@{USER_ID}>", bet=bet,
                                  currency=ec.CURRENCY_NAME, balance=balance)
 
 
 def lose_text(bet, balance):
-    return ec.UPGRADE_LOSE.format(mention=f"<@{USER_ID}>", bet=bet,
+    return ec.ROLL_LOSE.format(mention=f"<@{USER_ID}>", bet=bet,
                                   currency=ec.CURRENCY_NAME, balance=balance)
 
 
@@ -109,16 +109,16 @@ async def main():
 
     # -------------------------------------------------- the slash option shape
     await bot.add_cog(cog)
-    command = bot.tree.get_command("upgrade")
+    command = bot.tree.get_command("roll")
     params = {param.name: param for param in command.parameters}
     check("only bet is asked for", sorted(params), ["bet"])
     bet = params["bet"]
     check("bet optional", bet.required, False)
-    check("bet default", bet.default, ec.UPGRADE_DEFAULT_BET)
-    check("bet default is 5", ec.UPGRADE_DEFAULT_BET, 5)
+    check("bet default", bet.default, ec.ROLL_DEFAULT_BET)
+    check("bet default is 5", ec.ROLL_DEFAULT_BET, 5)
     check("bet min", bet.min_value, 1)
-    check("bet max", bet.max_value, ec.UPGRADE_MAX_BET)
-    check("bet max is 100", ec.UPGRADE_MAX_BET, 100)
+    check("bet max", bet.max_value, ec.ROLL_MAX_BET)
+    check("bet max is 100", ec.ROLL_MAX_BET, 100)
 
     # -------------------------------------------------- the money actually moves
     await db.add_balance(GUILD_ID, USER_ID, 200)
@@ -126,22 +126,22 @@ async def main():
 
     ec._rng = Rigged(0.0)  # always win
     # no argument at all -> the default bet is used
-    await cog.upgrade.callback(cog, interaction)
+    await cog.roll.callback(cog, interaction)
     check("default bet win message", last(interaction),
-          win_text(ec.UPGRADE_DEFAULT_BET, 205))
+          win_text(ec.ROLL_DEFAULT_BET, 205))
     check("default bet doubled 200 -> 205", await balance(), 205)
 
     # the hard cap the user is allowed to bet
-    await cog.upgrade.callback(cog, interaction, ec.UPGRADE_MAX_BET)
+    await cog.roll.callback(cog, interaction, ec.ROLL_MAX_BET)
     check("max bet win message", last(interaction),
-          win_text(ec.UPGRADE_MAX_BET, 305))
+          win_text(ec.ROLL_MAX_BET, 305))
     check("max bet doubled 205 -> 305", await balance(), 305)
 
     # a loss takes the very same amount away
     ec._rng = Rigged(1.0)  # always lose
-    await cog.upgrade.callback(cog, interaction, ec.UPGRADE_MAX_BET)
+    await cog.roll.callback(cog, interaction, ec.ROLL_MAX_BET)
     check("max bet lose message", last(interaction),
-          lose_text(ec.UPGRADE_MAX_BET, 205))
+          lose_text(ec.ROLL_MAX_BET, 205))
     check("max bet lost 305 -> 205", await balance(), 205)
 
     # the smallest allowed bet
@@ -149,17 +149,17 @@ async def main():
     check("drained wallet", await balance(), 0)
     await db.add_balance(GUILD_ID, USER_ID, 1)
     ec._rng = Rigged(0.0)
-    await cog.upgrade.callback(cog, interaction, 1)
+    await cog.roll.callback(cog, interaction, 1)
     check("min bet win message", last(interaction), win_text(1, 2))
     check("min bet doubled 1 -> 2", await balance(), 2)
 
     # a bet the member cannot afford is refused and changes nothing
     await db.remove_balance(GUILD_ID, USER_ID, 1000)
     try:
-        await cog.upgrade.callback(cog, interaction, ec.UPGRADE_DEFAULT_BET)
+        await cog.roll.callback(cog, interaction, ec.ROLL_DEFAULT_BET)
         check("poor user refused", "no error", "InsufficientFunds")
     except ec.InsufficientFunds as error:
-        check("poor user refused", error.price, ec.UPGRADE_DEFAULT_BET)
+        check("poor user refused", error.price, ec.ROLL_DEFAULT_BET)
     check("nothing taken on a refusal", await balance(), 0)
 
     # ------------------------------------------------ the staff shop commands

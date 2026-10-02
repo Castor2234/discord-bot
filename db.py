@@ -412,7 +412,7 @@ async def transfer(guild_id, from_id, to_id, amount):
     return "ok"
 
 
-async def gamble(guild_id, user_id, stake, won, reason="upgrade"):
+async def gamble(guild_id, user_id, stake, won, reason="roll"):
     """Settle a coin flip: +stake when `won`, -stake otherwise.
 
     The user must own at least `stake` coins. The check and the balance change
