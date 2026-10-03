@@ -122,8 +122,11 @@ async def main():
     check("bet default", bet.default, ec.ROLL_DEFAULT_BET)
     check("bet default is 5", ec.ROLL_DEFAULT_BET, 5)
     check("bet min", bet.min_value, 1)
-    check("bet max", bet.max_value, ec.ROLL_MAX_BET)
-    check("bet max is 100", ec.ROLL_MAX_BET, 100)
+    # Discord freezes a Range at import, so it advertises the top of the ladder
+    # for everybody and the member's own tier is checked inside the command
+    check("bet max", bet.max_value, ec.ROLL_MAX_BET_LIMIT)
+    check("bet ceiling is 1000", ec.ROLL_MAX_BET_LIMIT, 1000)
+    check("free bet limit is 100", ec.ROLL_MAX_BET, 100)
 
     # -------------------------------------------------- the money actually moves
     await db.add_balance(GUILD_ID, USER_ID, 200)
@@ -175,10 +178,32 @@ async def main():
     check("member is required", params["member"].required, True)
     check("amount is required", params["amount"].required, True)
     check("amount range", (params["amount"].min_value, params["amount"].max_value),
-          (1, ec.TRANSFER_MAX_AMOUNT))
-    check("amount max is 100", ec.TRANSFER_MAX_AMOUNT, 100)
+          (1, ec.TRANSFER_MAX_AMOUNT_LIMIT))
+    check("amount ceiling is 1000", ec.TRANSFER_MAX_AMOUNT_LIMIT, 1000)
+    check("free transfer limit is 100", ec.TRANSFER_MAX_AMOUNT, 100)
     check("transfer cooldown is 60 s", ec.TRANSFER_COOLDOWN, 60.0)
     check("transfer is gated by a cooldown", bool(command.checks), True)
+
+    # ---------------------------------------- helpers for the refusal checks
+    async def refused_limit(name, member, amount, want):
+        """A transfer above the tier ceiling raises TransferTooHigh."""
+        try:
+            await cog.transfer.callback(cog, interaction, member, amount)
+            check(name, "no error", want)
+        except ec.TransferTooHigh as error:
+            check(name, await cog.error_text(error), want)
+
+    async def refused_cooldown(name):
+        """A transfer inside the tier cooldown raises TransferOnCooldown."""
+        try:
+            await cog.transfer.callback(cog, interaction, friend, 1)
+            check(name, "no error", "TransferOnCooldown")
+        except ec.TransferOnCooldown as error:
+            check(name + " waits the full cooldown",
+                  round(error.seconds_left), ec.TRANSFER_COOLDOWN)
+            check(name + " text", await cog.error_text(error),
+                  ec.COOLDOWN_MESSAGE.format(
+                      seconds=max(1, round(error.seconds_left))))
 
     # --------------------------------------------------------- the coins move
     friend = User(FRIEND_ID)
@@ -206,6 +231,17 @@ async def main():
     check("the receiver sees the payer",
           [row["other_user_id"] for row in received], [USER_ID])
 
+    # the free tier allows 100 at a time, so 101 is over the ceiling
+    await refused_limit("amount over the free tier refused", friend, 101,
+                        ec.TRANSFER_TOO_HIGH.format(
+                            limit=100, currency=ec.CURRENCY_NAME))
+    check("an over-limit transfer takes nothing", await friend_balance(), 100)
+
+    # the cooldown the free tier bought: a second transfer right away is refused
+    await refused_cooldown("second transfer is on cooldown")
+    # pretending the wait has passed lets the next checks move coins again
+    await db.refund_transfer_cooldown(GUILD_ID, USER_ID)
+
     # a second transfer moves the very same amount again
     await db.add_balance(GUILD_ID, USER_ID, 30)
     await cog.transfer.callback(cog, interaction, friend, 7)
@@ -220,6 +256,10 @@ async def main():
 
     # -------------------------------------------------------------- refusals
     async def refused(name, member, amount, want):
+        """A transfer refused for any reason, answered through error_text."""
+        # start from a clean cooldown so a refusal about the amount is not
+        # mistaken for a refusal about the wait
+        await db.refund_transfer_cooldown(GUILD_ID, USER_ID)
         try:
             await cog.transfer.callback(cog, interaction, member, amount)
             check(name, "no error", want)
@@ -231,13 +271,23 @@ async def main():
     # to a bot: nothing moves
     await refused("bot receiver refused", User(FRIEND_ID, bot=True), 5,
                   ec.TRANSFER_NOT_FOR_BOTS)
-    # more than the sender's wallet holds: nothing moves
-    await refused("poor sender refused", friend, 1000,
-                  ec.TRANSFER_INSUFFICIENT.format(missing=1000 - 23, amount=1000,
-                                                  balance=23,
-                                                  currency=ec.CURRENCY_NAME))
+    # more than the sender's wallet holds: nothing moves (within the 100 cap)
+    await refused("poor sender refused", friend, ec.TRANSFER_MAX_AMOUNT,
+                  ec.TRANSFER_INSUFFICIENT.format(
+                      missing=ec.TRANSFER_MAX_AMOUNT - 23,
+                      amount=ec.TRANSFER_MAX_AMOUNT, balance=23,
+                      currency=ec.CURRENCY_NAME))
     check("a refusal takes nothing", (await balance(), await friend_balance()),
           (23, 107))
+    # a refused transfer must not burn the wait either: send_coins hands the slot
+    # back, so a transfer that never happened does not cost the member a wait
+    allowed, seconds_left = await db.spend_transfer_cooldown(
+        GUILD_ID, USER_ID, ec.TRANSFER_COOLDOWN)
+    check("a refused transfer left the cooldown free", allowed, True)
+    check("the next transfer waits the whole cooldown", round(seconds_left),
+          ec.TRANSFER_COOLDOWN)
+    await db.refund_transfer_cooldown(GUILD_ID, USER_ID)
+    check("a refused transfer takes no coins", await friend_balance(), 107)
 
     # a bad amount is caught by the db even if the range were bypassed
     await refused("zero amount refused", friend, 0,

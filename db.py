@@ -14,6 +14,8 @@ import time
 
 import aiosqlite
 
+import upgrade_levels as levels
+
 DB_PATH = "bot.db"
 DB_TIMEOUT = 10  # seconds to wait for a locked database before giving up
 
@@ -63,12 +65,26 @@ async def init_db():
                 balance INTEGER DEFAULT 0,
                 last_daily REAL DEFAULT 0, last_xp REAL DEFAULT 0,
                 last_voice_xp REAL DEFAULT 0,
+                last_transfer REAL DEFAULT 0,
                 PRIMARY KEY (guild_id, user_id)
             )""")
         # databases created before voice XP exist without this column
         await _ensure_column(db, "users", "last_voice_xp", "REAL DEFAULT 0")
+        # the transfer cooldown is newer than the databases already in the wild
+        await _ensure_column(db, "users", "last_transfer", "REAL DEFAULT 0")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_users_guild_xp"
                          " ON users (guild_id, xp DESC)")
+
+        # one row per member; every tier is 0 until it is bought, which is the
+        # free level everybody starts on
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS user_upgrades (
+                guild_id INTEGER, user_id INTEGER,
+                daily_tier INTEGER NOT NULL DEFAULT 0,
+                roll_tier INTEGER NOT NULL DEFAULT 0,
+                transfer_tier INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (guild_id, user_id)
+            )""")
 
         await db.execute("""
             CREATE TABLE IF NOT EXISTS shop_items (
@@ -465,6 +481,138 @@ async def claim_daily(guild_id, user_id, amount, cooldown):
             row = await cur.fetchone()
     seconds_left = max(0.0, cooldown - (now - row["last_daily"]))
     return claimed, seconds_left, row["balance"]
+
+
+async def spend_transfer_cooldown(guild_id, user_id, cooldown):
+    """Take the transfer cooldown slot unless the member is still on cooldown.
+
+    The timestamp is one conditional statement, so two transfers arriving at the
+    same time cannot both pass. Returns (allowed, seconds_left).
+    """
+    now = time.time()
+    async with _connect() as db:
+        await ensure_user(db, guild_id, user_id)
+        cursor = await db.execute(
+            """UPDATE users SET last_transfer = ?
+               WHERE guild_id=? AND user_id=? AND ? - last_transfer >= ?""",
+            (now, guild_id, user_id, now, cooldown))
+        allowed = cursor.rowcount > 0
+        await db.commit()
+        async with db.execute(
+                "SELECT last_transfer FROM users WHERE guild_id=? AND user_id=?",
+                (guild_id, user_id)) as cur:
+            row = await cur.fetchone()
+    return allowed, max(0.0, cooldown - (now - row[0]))
+
+
+async def refund_transfer_cooldown(guild_id, user_id):
+    """Give the cooldown slot back when the transfer itself did not happen.
+
+    Without this a refused transfer (not enough coins, sending to yourself)
+    would still burn the wait, which reads as a bug to the member.
+    """
+    async with _connect() as db:
+        await db.execute(
+            "UPDATE users SET last_transfer = 0 WHERE guild_id=? AND user_id=?",
+            (guild_id, user_id))
+        await db.commit()
+
+
+# --------------------------------------------------------------------------
+# Upgrades
+#
+# A member's tiers live in user_upgrades (one row per member, tier 0 = the free
+# level). The catalogue itself - what a tier gives and what it costs - lives in
+# upgrade_levels.py, so the command layer never hard-codes a limit.
+# --------------------------------------------------------------------------
+
+async def get_user_upgrades(guild_id, user_id):
+    """The tiers of one member: {"daily": n, "roll": n, "transfer": n}.
+
+    A member without a row has no upgrades at all, so a missing row means all
+    zeros rather than an error. The row is created, because buying needs it.
+    """
+    async with _connect() as db:
+        await ensure_user(db, guild_id, user_id)
+        await db.execute(
+            "INSERT OR IGNORE INTO user_upgrades (guild_id, user_id) VALUES (?, ?)",
+            (guild_id, user_id))
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+                "SELECT * FROM user_upgrades WHERE guild_id=? AND user_id=?",
+                (guild_id, user_id)) as cur:
+            row = await cur.fetchone()
+        await db.commit()
+    return {name: row[column] for name, column in levels.COLUMNS.items()}
+
+
+async def buy_upgrade(guild_id, user_id, category, tier):
+    """Buy the step into `tier` of `category` for one member.
+
+    The balance check, the deduction and the new tier are ONE transaction, so a
+    crash can never take the coins without granting the upgrade. The tier only
+    moves by one step, which is what makes the upgrade path sequential.
+
+    Returns (status, balance, tiers). status is one of:
+    - "ok"          - paid for and the tier is now `tier`
+    - "unknown"     - no such category
+    - "maxed"       - already at the top of the ladder
+    - "owned"       - already owns that tier
+    - "sequential"  - the tier before it has to be bought first
+    - "insufficient"- not enough mango; nothing changed
+
+    balance and tiers are the real stored values on every path, so a caller can
+    report the outcome without asking again.
+    """
+    if category not in levels.COLUMNS:
+        return "unknown", 0, {}
+    column = levels.COLUMNS[category]      # a fixed name, never user input
+    top = levels.max_tier(category)
+    price = levels.price_for(category, tier)
+    if price is None:
+        # tier 0 is not sellable and anything past the top does not exist; the
+        # caller tells those two apart with max_tier()
+        status = "maxed" if tier > top else "owned"
+        return status, 0, await get_user_upgrades(guild_id, user_id)
+    status = "ok"
+    async with _connect() as db:
+        await ensure_user(db, guild_id, user_id)
+        await db.execute(
+            "INSERT OR IGNORE INTO user_upgrades (guild_id, user_id) VALUES (?, ?)",
+            (guild_id, user_id))
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+                f"SELECT {column} AS tier FROM user_upgrades "
+                "WHERE guild_id=? AND user_id=?", (guild_id, user_id)) as cur:
+            row = await cur.fetchone()
+        current = levels.clamp_tier(category, row["tier"] if row else 0)
+        if current >= tier:
+            status = "maxed" if current >= top else "owned"
+            await db.commit()
+        elif current != tier - 1:
+            status = "sequential"
+            await db.commit()
+        else:
+            cursor = await db.execute(
+                f"""UPDATE users SET balance = balance - ?
+                    WHERE guild_id=? AND user_id=? AND balance >= ?""",
+                (price, guild_id, user_id, price))
+            if cursor.rowcount == 0:
+                status = "insufficient"
+                await db.commit()
+            else:
+                await db.execute(
+                    f"UPDATE user_upgrades SET {column} = ? "
+                    "WHERE guild_id=? AND user_id=?",
+                    (tier, guild_id, user_id))
+                await _log_tx(db, guild_id, user_id, -price,
+                              f"upgrade:{category}")
+                await db.commit()
+        async with db.execute(
+                "SELECT balance FROM users WHERE guild_id=? AND user_id=?",
+                (guild_id, user_id)) as cur:
+            balance = (await cur.fetchone())["balance"]
+    return status, balance, await get_user_upgrades(guild_id, user_id)
 
 
 # --------------------------------------------------------------------------

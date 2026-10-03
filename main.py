@@ -12,7 +12,8 @@ guild_id = int(os.getenv('GUILD_ID'))
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 RESTART_FILE = os.path.join(BASE_DIR, "restart.json")
 
-COGS = ("cogs.levels", "cogs.economy", "cogs.roles", "cogs.command_channels")
+COGS = ("cogs.levels", "cogs.economy", "cogs.roles", "cogs.command_channels",
+        "cogs.upgrades")
 
 handler = logging.FileHandler(filename='discordbot.log', encoding='utf-8', mode='a')
 

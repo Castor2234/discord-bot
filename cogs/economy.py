@@ -14,6 +14,7 @@ from discord import app_commands
 from discord.abc import Messageable
 from discord.ext import commands
 
+import upgrade_levels as levels
 from db import (
     add_balance,
     add_shop_item,
@@ -23,12 +24,15 @@ from db import (
     get_shop_item,
     get_shop_items,
     get_user,
+    get_user_upgrades,
     hide_shop_item,
     purchase_item,
+    refund_transfer_cooldown,
     remove_balance,
     restore_shop_item,
     set_purchase_status,
     set_shop_item_price,
+    spend_transfer_cooldown,
     transfer as transfer_coins,   # the command is called transfer as well
 )
 
@@ -44,19 +48,34 @@ DAILY_INTERVAL = 24 * 3600               # seconds between two claims
 PENDING_STATUS = "pending"
 DELIVERED_STATUS = "delivered"
 
-# /roll: bet ROLL_DEFAULT_BET (up to ROLL_MAX_BET), win it once more
+# The /daily, /roll and /transfer limits are not fixed numbers but the tier a
+# member bought in upgrade_levels.py: index 0 is what everybody gets for free.
+# Discord freezes a Range at import time (Parameter.max_value has no setter),
+# so a command can only advertise the global ceiling and then check the
+# member's own tier in code.
+#
+# /roll: bet ROLL_DEFAULT_BET (up to the member's tier), win it once more
 # with ROLL_WIN_CHANCE, otherwise lose it
 ROLL_ENABLED = True
 ROLL_DEFAULT_BET = 5
-ROLL_MAX_BET = 100
 ROLL_WIN_CHANCE = 0.5
 ROLL_COOLDOWN = 3.0                   # seconds between two tries of one member
+# the value at the top of a ladder: what a Range can advertise for everybody
+ROLL_MAX_BET_LIMIT = levels.roll_max_bet(levels.max_tier("roll"))
 
-# /transfer: hand up to TRANSFER_MAX_AMOUNT coins to another member, no more
+# /transfer: hand up to the member's tier amount to another member, no more
 # often than once every TRANSFER_COOLDOWN seconds
 TRANSFER_ENABLED = True
-TRANSFER_MAX_AMOUNT = 100             # largest single /transfer
-TRANSFER_COOLDOWN = 60.0              # seconds between two transfers
+TRANSFER_COOLDOWN = 60.0              # seconds between two transfers (free level)
+# a decorator is frozen at import, so it can only hold the shortest cooldown of
+# the ladder; the member's own one is checked inside send_coins
+TRANSFER_COOLDOWN_FASTEST = levels.transfer_cooldown(levels.max_tier("transfer"))
+
+# the free level, kept for the texts and for the tests that pin the defaults
+DAILY_AMOUNT = levels.daily_amount(0)
+ROLL_MAX_BET = levels.roll_max_bet(0)
+TRANSFER_MAX_AMOUNT = levels.transfer_max(0)
+TRANSFER_MAX_AMOUNT_LIMIT = levels.transfer_max(levels.max_tier("transfer"))
 
 # user facing texts
 BALANCE_MESSAGE = "Баланс пользователя {mention}: **{balance}** {currency}."
@@ -109,6 +128,10 @@ TRANSFER_BAD_AMOUNT = "Сумма перевода должна быть от 1 
 TRANSFER_INSUFFICIENT = ("Не хватает ещё **{missing}** {currency} "
                          "(перевод **{amount}**, баланс **{balance}**).")
 TRANSFER_NOT_FOR_BOTS = "Ботам нельзя переводить монеты."
+ROLL_BET_TOO_HIGH = ("Твоя ставка сейчас максимум **{limit}** {currency}. "
+                     "Купить повышение: `/upgrades`.")
+TRANSFER_TOO_HIGH = ("Твой лимит перевода сейчас **{limit}** {currency}. "
+                     "Купить повышение: `/upgrades`.")
 ADMIN_MAX_AMOUNT = 1_000_000             # largest single /addcoins or /removecoins
 ADMIN_ADDED = "✅ {mention} получает **{amount}** {currency}. Баланс: **{balance}** {currency}."
 ADMIN_REMOVED = "✅ У {mention} снято **{removed}** {currency}. Баланс: **{balance}** {currency}."
@@ -153,6 +176,27 @@ class TransferError(commands.CommandError):
         super().__init__(text)
 
 
+class BetTooHigh(commands.CommandError):
+    """Raised when a /roll bet is above the ceiling the member bought."""
+
+    def __init__(self, limit: int, bet: int) -> None:
+        self.limit = limit
+        self.bet = bet
+        super().__init__(f"bet {bet} is over the limit {limit}")
+
+
+class TransferTooHigh(BetTooHigh):
+    """Raised when a /transfer amount is above the member's ceiling."""
+
+
+class TransferOnCooldown(commands.CommandError):
+    """Raised when the member has to wait before transferring again."""
+
+    def __init__(self, seconds_left: float) -> None:
+        self.seconds_left = seconds_left
+        super().__init__(f"transfer cooldown, {seconds_left:.0f} s left")
+
+
 class Economy(commands.Cog):
     """Coins, the daily reward, the shop, /roll and /transfer."""
 
@@ -185,8 +229,12 @@ class Economy(commands.Cog):
             await interaction.response.send_message(DAILY_DISABLED,
                                                     ephemeral=True)
             return
+        tiers = await get_user_upgrades(interaction.guild.id,
+                                        interaction.user.id)
+        # the upgrade tier decides how much the claim pays
+        amount = levels.daily_amount(tiers["daily"])
         claimed, seconds_left, balance = await claim_daily(
-            interaction.guild.id, interaction.user.id, DAILY_AMOUNT,
+            interaction.guild.id, interaction.user.id, amount,
             DAILY_INTERVAL)
         if not claimed:
             hours, minutes = divmod(int(seconds_left) // 60, 60)
@@ -195,7 +243,7 @@ class Economy(commands.Cog):
                 ephemeral=True)
             return
         await interaction.response.send_message(DAILY_CLAIMED.format(
-            amount=DAILY_AMOUNT, currency=CURRENCY_NAME, balance=balance))
+            amount=amount, currency=CURRENCY_NAME, balance=balance))
 
     # --------------------------------------------------------------- roll
     @app_commands.command(name="roll", description=ROLL_DESCRIPTION)
@@ -203,13 +251,20 @@ class Economy(commands.Cog):
     @app_commands.checks.cooldown(1, ROLL_COOLDOWN)
     @app_commands.describe(bet=ROLL_BET)
     async def roll(self, interaction: discord.Interaction,
-                      bet: app_commands.Range[int, 1, ROLL_MAX_BET]
-                      = ROLL_DEFAULT_BET) -> None:
+                  bet: app_commands.Range[int, 1, ROLL_MAX_BET_LIMIT]
+                  = ROLL_DEFAULT_BET) -> None:
         """Risk `bet` coins: double them or lose them."""
         if not ROLL_ENABLED:
             await interaction.response.send_message(ROLL_DISABLED,
                                                     ephemeral=True)
             return
+        # the Range above can only advertise the global ceiling, so the tier the
+        # member actually bought is what their bet is measured against
+        tiers = await get_user_upgrades(interaction.guild.id,
+                                        interaction.user.id)
+        max_bet = levels.roll_max_bet(tiers["roll"])
+        if bet > max_bet:
+            raise BetTooHigh(max_bet, bet)
         won = _rng.random() < ROLL_WIN_CHANCE
         played, balance = await gamble(interaction.guild.id,
                                        interaction.user.id, bet, won)
@@ -223,16 +278,19 @@ class Economy(commands.Cog):
     # ------------------------------------------------------------- transfer
     @app_commands.command(name="transfer", description=TRANSFER_DESCRIPTION)
     @app_commands.guild_only()
-    @app_commands.checks.cooldown(1, TRANSFER_COOLDOWN)
+    @app_commands.checks.cooldown(1, TRANSFER_COOLDOWN_FASTEST)
     @app_commands.describe(member=TRANSFER_MEMBER, amount=TRANSFER_AMOUNT)
     async def transfer(
             self, interaction: discord.Interaction, member: discord.Member,
-            amount: app_commands.Range[int, 1, TRANSFER_MAX_AMOUNT]) -> None:
+            amount: app_commands.Range[int, 1,
+                                      TRANSFER_MAX_AMOUNT_LIMIT]) -> None:
         """Hand `amount` coins from your wallet to `member`."""
         if not TRANSFER_ENABLED:
             await interaction.response.send_message(TRANSFER_DISABLED,
                                                     ephemeral=True)
             return
+        # the decorator can only hold the fastest cooldown, so the real per-tier
+        # one is spent inside send_coins
         await self.send_coins(interaction, interaction.user, member, amount)
 
     # ----------------------------------------------------------------- admin
@@ -440,16 +498,28 @@ class Economy(commands.Cog):
                          amount: int) -> None:
         """Move `amount` coins from `sender` to `receiver` in ONE transaction.
 
-        Raises TransferError so the command layer stays free of branch logic;
-        `cog_app_command_error` turns it into the reply.
+        Both limits come from the tier `sender` bought: the largest amount and
+        the seconds between two transfers. Raises TransferError so the command
+        layer stays free of branch logic; `cog_app_command_error` answers.
         """
         if receiver.bot:
             raise TransferError(TRANSFER_NOT_FOR_BOTS)
+        tiers = await get_user_upgrades(interaction.guild.id, sender.id)
+        tier = tiers["transfer"]
+        max_amount = levels.transfer_max(tier)
+        if amount > max_amount:
+            raise TransferTooHigh(max_amount, amount)
+        # the tier decides how often the coins may move
+        allowed, seconds_left = await spend_transfer_cooldown(
+            interaction.guild.id, sender.id, levels.transfer_cooldown(tier))
+        if not allowed:
+            raise TransferOnCooldown(seconds_left)
         # the db settles both wallets and writes the log atomically, so a crash
         # can never take the coins without giving them
         status = await transfer_coins(interaction.guild.id, sender.id,
                                       receiver.id, amount)
         if status != "ok":
+            await refund_transfer_cooldown(interaction.guild.id, sender.id)
             raise TransferError(await self.transfer_refusal(
                 interaction, status, amount))
         balance = (await get_user(interaction.guild.id, receiver.id))["balance"]
@@ -556,6 +626,17 @@ class Economy(commands.Cog):
             return ITEM_NOT_FOUND.format(query=error.query, available=available)
         if isinstance(error, TransferError):
             return error.text
+        # a bet or an amount over what this member bought; TransferTooHigh is the
+        # BetTooHigh subclass, so it has to be tested first
+        if isinstance(error, TransferTooHigh):
+            return TRANSFER_TOO_HIGH.format(limit=error.limit,
+                                            currency=CURRENCY_NAME)
+        if isinstance(error, BetTooHigh):
+            return ROLL_BET_TOO_HIGH.format(limit=error.limit,
+                                            currency=CURRENCY_NAME)
+        if isinstance(error, TransferOnCooldown):
+            return COOLDOWN_MESSAGE.format(
+                seconds=max(1, round(error.seconds_left)))
         # must come before the CheckFailure branch: a cooldown is a CheckFailure
         if isinstance(error, app_commands.CommandOnCooldown):
             return COOLDOWN_MESSAGE.format(
