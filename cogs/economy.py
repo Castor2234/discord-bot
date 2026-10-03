@@ -37,7 +37,8 @@ from db import (
 )
 
 # ------------------------------------------------------------------ settings
-CURRENCY_NAME = "манго <:dota_mango:1554514974121009152>"
+MANGO_EMOJI = "<:dota_mango:1554514974121009152>"
+CURRENCY_NAME = f"манго"
 SHOP_LOG_CHANNEL_ID: int | None = None   # staff channel for new orders
 SHOP_MAX_PRICE = 1_000_000               # largest price /shop setprice accepts
 SHOP_CODE_MAX = 32                       # longest code /shop add accepts
@@ -82,27 +83,27 @@ BALANCE_MESSAGE = "Баланс пользователя {mention}: **{balance}*
 SHOP_TITLE = "🛒 Магазин"
 SHOP_EMPTY = "Магазин пуст."
 SHOP_FOOTER = "Buy with `{prefix}shop buy <code>`."
-SHOP_ITEM_ADDED = "✅ Товар **{name}** (`{code}`) добавлен за 🪙 {price}."
+SHOP_ITEM_ADDED = "✅ Товар **{name}** (`{code}`) добавлен за {MANGO_EMOJI} {price}."
 SHOP_ITEM_EXISTS = ("Товар с кодом `{code}` уже существует. Если он скрыт, "
                     "верните его командой `restore`.")
-SHOP_ITEM_PRICED = "✅ Цена **{name}** (`{code}`): 🪙 {old} → 🪙 {new}."
+SHOP_ITEM_PRICED = "✅ Цена **{name}** (`{code}`): {MANGO_EMOJI} {old} → {MANGO_EMOJI} {new}."
 SHOP_ITEM_HIDDEN = "🗑 Товар **{name}** (`{code}`) убран из магазина."
 SHOP_ITEM_ALREADY_HIDDEN = "Товар **{name}** (`{code}`) и так не в магазине."
-SHOP_ITEM_RESTORED = "♻️ Товар **{name}** (`{code}`) снова в магазине за 🪙 {price}."
+SHOP_ITEM_RESTORED = "♻️ Товар **{name}** (`{code}`) снова в магазине за {MANGO_EMOJI} {price}."
 SHOP_ITEM_ALREADY_ON_SALE = "Товар **{name}** (`{code}`) и так в магазине."
 SHOP_ITEM_NOT_FOUND = "В магазине нет товара `{query}`."
 SHOP_BAD_CODE = ("Код должен быть 1-{max} символов, без пробелов и не только "
                  "из цифр.")
-SHOP_LINE = "**{name}** — 🪙 {price} (`{code}`)\n{description}"
-PURCHASE_MESSAGE = ("🛒 You bought **{name}** for 🪙 {price}. "
-                    "Balance: 🪙 {balance}. Order **#{order_id}**.")
-PURCHASE_LOG = ("🛒 {mention} bought **{name}** for 🪙 {price} - "
-                "order **#{order_id}** ({status})")
+SHOP_LINE = "**{name}** — {MANGO_EMOJI} {price} (`{code}`)\n{description}"
+PURCHASE_MESSAGE = ("🛒 Вы купили **{name}** за {MANGO_EMOJI} {price}. "
+                    "Баланс: {MANGO_EMOJI} {balance}. Заказ **#{order_id}**.")
+PURCHASE_LOG = ("🛒 {mention} купил **{name}** за {MANGO_EMOJI} {price} - "
+                "заказ **#{order_id}** ({status})")
 INSUFFICIENT_FUNDS = "Не хватает еще **{missing}** {currency} (цена: {price})."
 ITEM_NOT_FOUND = "В магазине нет товара `{query}`. Доступные товары: {available}"
 ORDERS_TITLE = "🧾 Последние заказы"
 ORDERS_EMPTY = "Нет заказов."
-ORDER_LINE = "**#{order_id}** {mention} — {name}, 🪙 {price}, `{status}`, {when}"
+ORDER_LINE = "**#{order_id}** {mention} — {name}, {MANGO_EMOJI} {price}, `{status}`, {when}"
 ORDER_UPDATED = "Заказ **#{order_id}** теперь `{status}`."
 ORDER_NOT_FOUND = "Заказа **#{order_id}** не существует."
 DAILY_CLAIMED = "<:pudge:1554517617434296320> Ежедневная награда получена: **{amount}** {currency}. Баланс: **{balance}** {currency}."
@@ -147,8 +148,8 @@ _rng = random.SystemRandom()
 
 
 def coins(amount: int) -> str:
-    """Format a coin amount, e.g. ``🪙 10 coins``."""
-    return f"🪙 {amount} {CURRENCY_NAME}"
+    """Format a coin amount, e.g. ``{MANGO_EMOJI} 10 coins``."""
+    return f"{MANGO_EMOJI} {amount} {CURRENCY_NAME}"
 
 
 class InsufficientFunds(commands.CommandError):
@@ -404,7 +405,7 @@ class Economy(commands.Cog):
     @app_commands.describe(
         code="Short unique code members type to buy it, e.g. 1x6",
         name="Display name of the item",
-        price="Price in coins",
+        price="Price in mango",
         description="Optional line shown under the item",
     )
     async def shop_add(self, interaction: discord.Interaction,
