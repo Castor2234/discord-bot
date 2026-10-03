@@ -31,6 +31,9 @@ ANNOUNCE_ID = 1004
 DEAD_ID = 1099
 IGNORED_ROLE_ID = 866824826077446204
 MOD_ROLE_ID = 2002
+BOOST_ROLE_ID = 2003       # a role that earns 1.25x
+BIG_BOOST_ROLE_ID = 2004   # a role that earns 1.5x
+HALF_ROLE_ID = 2005        # a role that earns 0.5x
 USER_ID = 777
 
 failures = []
@@ -143,7 +146,10 @@ class Guild:
                          (self.text, self.voice, self.thread, self.announce,
                           self.locked)}
         self.roles = {MOD_ROLE_ID: Role(MOD_ROLE_ID, "mod", self),
-                      IGNORED_ROLE_ID: Role(IGNORED_ROLE_ID, "muted", self)}
+                      IGNORED_ROLE_ID: Role(IGNORED_ROLE_ID, "muted", self),
+                      BOOST_ROLE_ID: Role(BOOST_ROLE_ID, "boost", self),
+                      BIG_BOOST_ROLE_ID: Role(BIG_BOOST_ROLE_ID, "vip", self),
+                      HALF_ROLE_ID: Role(HALF_ROLE_ID, "slow", self)}
         self.me = Member()
         self.system_channel = self.text
         self.afk_channel = None
@@ -352,6 +358,8 @@ async def main():
           lv.CHANNEL_TARGET.format(target_id=VOICE_ID))
     check("settings lists default role", values[lv.SETTINGS_ROLES_FIELD],
           lv.ROLE_TARGET.format(target_id=IGNORED_ROLE_ID))
+    check("settings has no multipliers yet",
+          values[lv.SETTINGS_MULTIPLIERS_FIELD], lv.MULTIPLIER_NO_ROLES)
     check("dead channel pruned", await db.list_ignored_channels(GUILD_ID),
           {VOICE_ID})
     check("dead role pruned", await db.list_ignored_roles(GUILD_ID),
@@ -405,20 +413,176 @@ async def main():
     check("deleted role dropped", MOD_ROLE_ID in stored.ignored_roles, False)
     await db.clear_level_up_channel(GUILD_ID, ANNOUNCE_ID)
 
+    # ------------------------------------------------------- the XP multipliers
+    # a server that never set one leaves everybody on 1x
+    plain = lv.GuildLevelSettings()
+    check("no multipliers by default", plain.role_multipliers, {})
+    check("plain member is 1x", plain.multiplier_for(Member()), 1.0)
+    check("plain xp untouched", lv.Levels.xp_for(20, Member(), plain), 20)
+
+    boosted = lv.GuildLevelSettings(role_multipliers={
+        BOOST_ROLE_ID: 1.25, BIG_BOOST_ROLE_ID: 1.5, HALF_ROLE_ID: 0.5})
+    boost = lambda *ids: Member([Role(i, "r") for i in ids])
+    check("member with no booster is 1x", boosted.multiplier_for(Member()), 1.0)
+    check("1.25x role", boosted.multiplier_for(boost(BOOST_ROLE_ID)), 1.25)
+    check("1.5x role", boosted.multiplier_for(boost(BIG_BOOST_ROLE_ID)), 1.5)
+    check("0.5x role", boosted.multiplier_for(boost(HALF_ROLE_ID)), 0.5)
+    check("only the best role counts",
+          boosted.multiplier_for(boost(BOOST_ROLE_ID, BIG_BOOST_ROLE_ID)), 1.5)
+    check("an unrelated role changes nothing",
+          boosted.multiplier_for(boost(MOD_ROLE_ID)), 1.0)
+
+    # the XP a member is actually paid
+    check("1.25x of 20",
+          lv.Levels.xp_for(20, boost(BOOST_ROLE_ID), boosted), 25)
+    check("1.5x of 20",
+          lv.Levels.xp_for(20, boost(BIG_BOOST_ROLE_ID), boosted), 30)
+    check("0.5x of 20", lv.Levels.xp_for(20, boost(HALF_ROLE_ID), boosted), 10)
+    check("a tiny multiplier still pays one",
+          lv.Levels.xp_for(1, boost(HALF_ROLE_ID),
+                           lv.GuildLevelSettings(
+                               role_multipliers={HALF_ROLE_ID: 0.1})), 1)
+
+    # how a multiplier is shown and snapped
+    check("show drops a trailing zero", lv.Levels.show_multiplier(1.50), "1.5")
+    check("show keeps two decimals", lv.Levels.show_multiplier(1.25), "1.25")
+    check("show a whole number", lv.Levels.show_multiplier(2.0), "2")
+    check("normalise snaps up", lv.Levels.normalise_multiplier(1.23), 1.25)
+    check("normalise keeps an exact step",
+          lv.Levels.normalise_multiplier(1.25), 1.25)
+
+    # the settings field: best multiplier first
+    check("multiplier field sorted", cog.render_multipliers(
+        boosted.role_multipliers),
+        lv.MULTIPLIER_TARGET.format(role_id=BIG_BOOST_ROLE_ID, multiplier="1.5")
+        + "\n" + lv.MULTIPLIER_TARGET.format(role_id=BOOST_ROLE_ID,
+                                             multiplier="1.25")
+        + "\n" + lv.MULTIPLIER_TARGET.format(role_id=HALF_ROLE_ID,
+                                             multiplier="0.5"))
+    check("multiplier field empty", cog.render_multipliers({}),
+          lv.MULTIPLIER_NO_ROLES)
+
+    # /levels multiplier, including the @everyone guard
+    try:
+        await cog.levels_multiplier.callback(
+            cog, ctx, Role(GUILD_ID, "@everyone"), 1.25)
+        check("multiplier everyone refused", "no error", "LevelConfigError")
+    except lv.LevelConfigError as exc:
+        check("multiplier everyone refused", str(exc),
+              lv.ROLE_MULTIPLIER_EVERYONE.replace("@everyone", "@\u200beveryone"))
+    check("everyone stored nothing",
+          await db.list_role_multipliers(GUILD_ID), {})
+
+    await cog.levels_multiplier.callback(cog, ctx, guild.roles[BOOST_ROLE_ID],
+                                         1.25)
+    check("multiplier answer", last(ctx),
+          lv.MULTIPLIER_SET.format(role="boost", multiplier="1.25"))
+    check("multiplier stored", (await cog.load_settings(GUILD_ID)
+                                ).role_multipliers, {BOOST_ROLE_ID: 1.25})
+
+    # setting the same value again says so instead of claiming a change
+    await cog.levels_multiplier.callback(cog, ctx, guild.roles[BOOST_ROLE_ID],
+                                         1.25)
+    check("multiplier unchanged answer", last(ctx),
+          lv.MULTIPLIER_UNCHANGED.format(role="boost", multiplier="1.25"))
+
+    # a value off the step grid is refused instead of quietly rounded
+    await cog.levels_multiplier.callback(cog, ctx, guild.roles[MOD_ROLE_ID],
+                                         1.23)
+    check("off grid refused", last(ctx), lv.MULTIPLIER_OFF_GRID.format(
+        value="1.23", step=cog.show_multiplier(lv.MULTIPLIER_STEP),
+        nearest="1.25"))
+    check("off grid stored nothing", (await cog.load_settings(GUILD_ID)
+                                      ).role_multipliers, {BOOST_ROLE_ID: 1.25})
+    await cog.levels_multiplier.callback(cog, ctx, guild.roles[MOD_ROLE_ID],
+                                         99.0)
+    check("out of range refused", last(ctx), lv.MULTIPLIER_OUT_OF_RANGE.format(
+        min=lv.MULTIPLIER_MIN, max=lv.MULTIPLIER_MAX, value="99"))
+
+    # a booster that is also on the ignore list says so, it earns nothing
+    await cog.levels_multiplier.callback(cog, ctx,
+                                         guild.roles[IGNORED_ROLE_ID], 1.5)
+    check("ignored booster warns", last(ctx),
+          lv.MULTIPLIER_SET.format(role="muted", multiplier="1.5")
+          + lv.MULTIPLIER_IS_IGNORED.format(role="muted"))
+    await cog.levels_clearmultiplier.callback(cog, ctx,
+                                              guild.roles[IGNORED_ROLE_ID])
+
+    # the XP gate honours the multiplier: the paid XP matches the base draw
+    await db.set_xp(GUILD_ID, USER_ID, 0, 0)
+    async with db._connect() as conn:   # the cooldown would eat the next message
+        await conn.execute("UPDATE users SET last_xp=0 WHERE guild_id=?",
+                           (GUILD_ID,))
+        await conn.commit()
+    cog.forget_settings(GUILD_ID)
+    await cog.on_message(Message(guild, guild.text,
+                                 Member([guild.roles[BOOST_ROLE_ID]])))
+    boosted_xp = (await db.get_user(GUILD_ID, USER_ID))["xp"]
+    check("boosted message paid above the base range",
+          boosted_xp >= round(lv.XP_MIN * 1.25)
+          and boosted_xp <= round(lv.XP_MAX * 1.25), True)
+
+    # clearing
+    await cog.levels_clearmultiplier.callback(cog, ctx,
+                                              guild.roles[BOOST_ROLE_ID])
+    check("multiplier cleared answer", last(ctx),
+          lv.MULTIPLIER_CLEARED.format(role="boost"))
+    check("multiplier cleared",
+          (await cog.load_settings(GUILD_ID)).role_multipliers, {})
+    await cog.levels_clearmultiplier.callback(cog, ctx,
+                                              guild.roles[BOOST_ROLE_ID])
+    check("clearing twice says so", last(ctx),
+          lv.MULTIPLIER_NOT_CLEARED.format(role="boost"))
+
+    await cog.levels_multiplier.callback(cog, ctx, guild.roles[BOOST_ROLE_ID],
+                                         1.25)
+    await cog.levels_multiplier.callback(cog, ctx,
+                                         guild.roles[BIG_BOOST_ROLE_ID], 1.5)
+    await cog.levels_clearmultipliers.callback(cog, ctx)
+    check("cleared all answer", last(ctx),
+          lv.MULTIPLIERS_ALL_CLEARED.format(count=2))
+    check("cleared all",
+          (await cog.load_settings(GUILD_ID)).role_multipliers, {})
+    await cog.levels_clearmultipliers.callback(cog, ctx)
+    check("clearing all twice says so", last(ctx),
+          lv.MULTIPLIERS_NOTHING_TO_CLEAR)
+
+    # a deleted role takes its multiplier with it
+    await db.set_role_multiplier(GUILD_ID, MOD_ROLE_ID, 1.25)
+    await db.set_role_multiplier(GUILD_ID, 9999, 1.5)   # a role that is gone
+    cog.forget_settings(GUILD_ID)
+    await cog.on_guild_role_delete(guild.roles[MOD_ROLE_ID])
+    check("deleted role lost its multiplier",
+          (await cog.load_settings(GUILD_ID)).role_multipliers, {9999: 1.5})
+    cog.forget_settings(GUILD_ID)
+    await cog.prune_missing(guild, await cog.load_settings(GUILD_ID))
+    check("dead multiplier pruned",
+          (await cog.load_settings(GUILD_ID)).role_multipliers, {})
+
     # a second server starts from the defaults
     other = await cog.load_settings(4242)
     check("other server channel", other.level_up_channel_id,
           lv.DEFAULT_LEVEL_UP_CHANNEL_ID)
     check("other server ignores", other.ignored_roles,
           set(lv.DEFAULT_IGNORED_ROLE_IDS))
+    check("other server multipliers", other.role_multipliers, {})
 
     # what the slash tree looks like
     await bot.add_cog(cog)
     group = bot.tree.get_command("levels")
     names = sorted(command.name for command in group.walk_commands())
     check("slash subcommands", names,
-          ["addxp", "ignorechannel", "ignorerole", "levelup", "resetxp",
-           "settings", "setxp", "unignorechannel", "unignorerole"])
+          ["addxp", "clearmultiplier", "clearmultipliers", "ignorechannel",
+           "ignorerole", "levelup", "multiplier", "resetxp", "settings",
+           "setxp", "unignorechannel", "unignorerole"])
+    mult = group.get_command("multiplier")
+    mparams = {param.name: param for param in mult.parameters}
+    check("multiplier params", sorted(mparams), ["multiplier", "role"])
+    check("multiplier value required", mparams["multiplier"].required, True)
+    check("multiplier role required", mparams["role"].required, True)
+    clear = group.get_command("clearmultiplier")
+    check("clearmultiplier takes a role",
+          [p.name for p in clear.parameters], ["role"])
     levelup = group.get_command("levelup")
     params = {param.name: param for param in levelup.parameters}
     check("levelup params", sorted(params), ["channel", "everywhere"])

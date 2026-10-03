@@ -19,6 +19,7 @@ from db import (
     add_ignored_role,
     add_xp_with_cooldown,
     clear_level_up_channel,
+    clear_role_multipliers,
     ensure_guild_settings,
     get_guild_settings,
     get_leaderboard,
@@ -26,12 +27,15 @@ from db import (
     get_user,
     list_ignored_channels,
     list_ignored_roles,
+    list_role_multipliers,
     mark_voice_join,
     remove_ignored_channel,
     remove_ignored_role,
+    remove_role_multiplier,
     reset_xp,
     set_level,
     set_level_up_channel,
+    set_role_multiplier,
     set_xp,
 )
 
@@ -64,6 +68,15 @@ VOICE_XP_INTERVAL = 60       # seconds in voice that pay out
 VOICE_XP_IGNORE_MUTED = True            # muted/deafened members earn nothing
 VOICE_XP_REQUIRE_OTHER_MEMBERS = False  # True = must not sit alone in a channel
 VOICE_XP_IGNORE_AFK_CHANNEL = True
+
+# XP multipliers: a role can earn more (or less) XP than everybody else
+MULTIPLIER_MIN = 0.1            # /levels multiplier refuses anything below
+MULTIPLIER_MAX = 10.0           # ... or above this
+MULTIPLIER_STEP = 0.05          # how much one press of the slider moves it
+MULTIPLIER_DECIMALS = 2         # what /levels multiplier stores and shows
+MULTIPLIER_DEFAULT = 1.0        # a member with no booster role
+MULTIPLIER_STACKS = False       # True = the boosters of a member add up
+MULTIPLIER_LIST_LIMIT = 9       # roles one field of /levels settings lists
 
 # user facing texts
 LEVEL_UP_MESSAGE = "🎉 {mention} теперь имеет **{level}** уровень!"
@@ -116,16 +129,36 @@ ROLE_NOT_IGNORED = "**{role}** и так не в списке игнорируе
 SETTINGS_TITLE = "⚙️ Настройки уровней **{guild}**"
 SETTINGS_CHANNEL_FIELD = "Канал повышений"
 SETTINGS_EVERYWHERE_FIELD = "Все повышения туда"
+ROLE_NOT_IGNORED = "**{role}** и так не в списке игнорируемых ролей."
+
+# XP multipliers
+ROLE_MULTIPLIER_EVERYONE = ("Роль @everyone не может иметь множитель: это изменило"
+                            " бы опыт всего сервера разом.")
+MULTIPLIER_SET = "🚀 Участники с ролью **{role}** получают **{multiplier}×** опыта."
+MULTIPLIER_UNCHANGED = "**{role}** и так даёт **{multiplier}×** опыта."
+MULTIPLIER_CLEARED = "🔇 Участники с ролью **{role}** снова получают обычный опыт."
+MULTIPLIER_NOT_CLEARED = "**{role}** и так не имел множителя."
+MULTIPLIERS_ALL_CLEARED = ("🗑️ Убрал все роли с множителем: их было **{count}**."
+                          " Теперь у всех обычный опыт.")
+MULTIPLIERS_NOTHING_TO_CLEAR = "Ролей с множителем и так не было."
+MULTIPLIER_OUT_OF_RANGE = ("Множитель должен быть от **{min}** до **{max}**, "
+                          "получено **{value}**.")
+MULTIPLIER_OFF_GRID = ("Множитель **{value}** не попадает в шаг **{step}**. "
+                      "Ближайший подходящий: **{nearest}**.")
+MULTIPLIER_IS_IGNORED = ("\n⚠️ Роль **{role}** сейчас в списке игнорируемых, "
+                         "её участники не получают опыт вообще.")
+
+# how a role with a multiplier is written in the settings field
+MULTIPLIER_TARGET = "<@&{role_id}> — **{multiplier}×**"
+MULTIPLIER_NO_ROLES = "нет (у всех 1×)"
 SETTINGS_CHANNELS_FIELD = "Игнорируемые каналы"
 SETTINGS_ROLES_FIELD = "Игнорируемые роли"
+SETTINGS_MULTIPLIERS_FIELD = "Роли с множителем опыта"
 SETTINGS_EMPTY = "ничего"
 SETTINGS_MORE = "…и ещё **{count}**"
 SETTINGS_YES = "да"
 SETTINGS_NO = "нет"
 SETTINGS_PRUNED = "Убрал удалённых: каналов {channels}, ролей {roles}."
-
-CHANNEL_NOT_FOUND_ERROR = "Не нашёл такой канал на этом сервере."
-ROLE_NOT_FOUND_ERROR = "Не нашёл такую роль на этом сервере."
 
 
 # ------------------------------------------------------------------- errors
@@ -145,16 +178,18 @@ class GuildLevelSettings:
     """
 
     __slots__ = ("level_up_channel_id", "level_up_everywhere",
-                 "ignored_channels", "ignored_roles")
+                 "ignored_channels", "ignored_roles", "role_multipliers")
 
     def __init__(self, level_up_channel_id: int | None = None,
                  level_up_everywhere: bool = False,
                  ignored_channels: frozenset[int] = frozenset(),
-                 ignored_roles: frozenset[int] = frozenset()) -> None:
+                 ignored_roles: frozenset[int] = frozenset(),
+                 role_multipliers: dict[int, float] | None = None) -> None:
         self.level_up_channel_id = level_up_channel_id
         self.level_up_everywhere = level_up_everywhere
         self.ignored_channels = frozenset(ignored_channels)
         self.ignored_roles = frozenset(ignored_roles)
+        self.role_multipliers = dict(role_multipliers or {})
 
     def blocks_channel(self, channel_id: int | None) -> bool:
         """True when no XP may be awarded in this channel."""
@@ -164,6 +199,23 @@ class GuildLevelSettings:
         """True when one of the roles of `member` is on the ignore list."""
         return bool(self.ignored_roles.intersection(
             role.id for role in member.roles))
+
+    def multiplier_for(self, member: discord.Member) -> float:
+        """The XP multiplier of `member`, 1.0 when they hold no special role.
+
+        Only the best of a member's roles counts by default: a member with two
+        1.5x roles would otherwise earn 2.25x, and a staff member handing out
+        roles could hand out an unbounded bonus by accident. Set
+        MULTIPLIER_STACKS to make the bonuses of the roles add up instead.
+        """
+        values = [self.role_multipliers[role.id]
+                  for role in member.roles if role.id in self.role_multipliers]
+        if not values:
+            return MULTIPLIER_DEFAULT
+        if MULTIPLIER_STACKS:
+            # 1x per role plus the bonus of each role on top of it
+            return MULTIPLIER_DEFAULT + sum(value - 1.0 for value in values)
+        return max(values)
 
 
 # --------------------------------------------------------- level curve maths
@@ -246,11 +298,37 @@ class Levels(commands.Cog):
             level_up_everywhere=bool(row["level_up_everywhere"]) if row else False,
             ignored_channels=await list_ignored_channels(guild_id),
             ignored_roles=await list_ignored_roles(guild_id),
+            role_multipliers=await list_role_multipliers(guild_id),
         )
 
     def forget_settings(self, guild_id: int) -> None:
         """Drop the cached settings so the next read sees a fresh write."""
         self._settings_cache.pop(guild_id, None)
+
+    # ---------------------------------------------------------- XP multipliers
+    @staticmethod
+    def xp_for(amount: int, member: discord.Member,
+               settings: GuildLevelSettings) -> int:
+        """`amount` XP after the multiplier of the roles of `member`.
+
+        Rounded to a whole number of XP (the users table stores integers) and
+        never below 1, so even a tiny multiplier still pays out something
+        instead of silently swallowing the message.
+        """
+        multiplier = settings.multiplier_for(member)
+        if multiplier == MULTIPLIER_DEFAULT:
+            return amount
+        return max(1, round(amount * multiplier))
+
+    @staticmethod
+    def normalise_multiplier(value: float) -> float:
+        """A multiplier snapped to the grid the commands offer.
+
+        Rounding here rather than on the way in keeps a stored multiplier and
+        the one `/levels multiplier` reports from ever disagreeing.
+        """
+        return round(round(value / MULTIPLIER_STEP) * MULTIPLIER_STEP,
+                     MULTIPLIER_DECIMALS)
 
     # ------------------------------------------------------------ XP gaining
     @commands.Cog.listener()
@@ -263,7 +341,8 @@ class Levels(commands.Cog):
         if settings.blocks_member(message.author):
             return
 
-        amount = random.randint(XP_MIN, XP_MAX)
+        amount = self.xp_for(random.randint(XP_MIN, XP_MAX), message.author,
+                             settings)
         awarded, xp, stored_level = await add_xp_with_cooldown(
             message.guild.id, message.author.id, amount, XP_COOLDOWN)
         if not awarded:
@@ -355,7 +434,9 @@ class Levels(commands.Cog):
             if VOICE_XP_REQUIRE_OTHER_MEMBERS and len(members) < 2:
                 continue
             for member in members:
-                amount = random.randint(VOICE_XP_MIN, VOICE_XP_MAX)
+                amount = self.xp_for(
+                    random.randint(VOICE_XP_MIN, VOICE_XP_MAX),
+                    member, settings)
                 awarded, xp, stored_level = await add_xp_with_cooldown(
                     guild.id, member.id, amount, VOICE_XP_INTERVAL,
                     column="last_voice_xp")
@@ -586,6 +667,84 @@ class Levels(commands.Cog):
         await interaction.response.send_message(
             text.format(role=role.name), ephemeral=True)
 
+    @levels.command(name="multiplier",
+                    description="Give a role a multiplied amount of XP")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.describe(role="Role that should earn a different amount of XP",
+                           multiplier="How much XP it earns, e.g. 1.25 for 1.25x")
+    async def levels_multiplier(self, interaction: discord.Interaction,
+                                role: discord.Role, multiplier: float) -> None:
+        """Make the holders of `role` earn `multiplier` times the XP."""
+        value = await self.check_multiplier(interaction, multiplier)
+        if value is None:
+            return
+        if role.is_default():
+            raise LevelConfigError(ROLE_MULTIPLIER_EVERYONE)
+
+        changed = await set_role_multiplier(interaction.guild.id, role.id, value)
+        self.forget_settings(interaction.guild.id)
+        text = MULTIPLIER_SET if changed else MULTIPLIER_UNCHANGED
+        text = text.format(role=role.name, multiplier=self.show_multiplier(value))
+        if role.id in await list_ignored_roles(interaction.guild.id):
+            # the ignore list is checked first, so a booster nobody can reach
+            # would look broken
+            text += MULTIPLIER_IS_IGNORED.format(role=role.name)
+        await interaction.response.send_message(text, ephemeral=True)
+
+    @levels.command(name="clearmultiplier",
+                    description="Take the XP multiplier off a role")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.describe(role="Role to put back on the normal amount of XP")
+    async def levels_clearmultiplier(self, interaction: discord.Interaction,
+                                     role: discord.Role) -> None:
+        """Put the holders of `role` back on 1x."""
+        removed = await remove_role_multiplier(interaction.guild.id, role.id)
+        self.forget_settings(interaction.guild.id)
+        text = (MULTIPLIER_CLEARED if removed else MULTIPLIER_NOT_CLEARED)
+        await interaction.response.send_message(
+            text.format(role=role.name), ephemeral=True)
+
+    @levels.command(name="clearmultipliers",
+                    description="Put every role back on the normal amount of XP")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def levels_clearmultipliers(self,
+                                      interaction: discord.Interaction) -> None:
+        """Drop every multiplier of this server at once."""
+        removed = await clear_role_multipliers(interaction.guild.id)
+        self.forget_settings(interaction.guild.id)
+        text = (MULTIPLIERS_ALL_CLEARED.format(count=removed) if removed
+                else MULTIPLIERS_NOTHING_TO_CLEAR)
+        await interaction.response.send_message(text, ephemeral=True)
+
+    async def check_multiplier(self, interaction: discord.Interaction,
+                               value: float) -> float | None:
+        """The multiplier to store, or None once the answer was sent.
+
+        Refusing here rather than in the database keeps one bad number from
+        turning into a settings row nobody can fix from Discord.
+        """
+        step = self.show_multiplier(MULTIPLIER_STEP)
+        if not MULTIPLIER_MIN <= value <= MULTIPLIER_MAX:
+            await interaction.response.send_message(MULTIPLIER_OUT_OF_RANGE.format(
+                min=MULTIPLIER_MIN, max=MULTIPLIER_MAX,
+                value=self.show_multiplier(value)), ephemeral=True)
+            return None
+        snapped = self.normalise_multiplier(value)
+        if snapped != value:
+            await interaction.response.send_message(MULTIPLIER_OFF_GRID.format(
+                value=self.show_multiplier(value), step=step,
+                nearest=self.show_multiplier(snapped)), ephemeral=True)
+            return None
+        return snapped
+
+    @staticmethod
+    def show_multiplier(value: float) -> str:
+        """A multiplier as it is shown to staff: 1.25 and not 1.2500000001."""
+        text = f"{round(value, MULTIPLIER_DECIMALS):.{MULTIPLIER_DECIMALS}f}"
+        return text.rstrip("0").rstrip(".") or "0"
+
+
+
     @levels.command(name="settings",
                     description="Show the level settings of this server")
     @app_commands.checks.has_permissions(manage_guild=True)
@@ -617,6 +776,9 @@ class Levels(commands.Cog):
                         value=self.render_list(settings.ignored_roles,
                                                ROLE_TARGET),
                         inline=False)
+        embed.add_field(name=SETTINGS_MULTIPLIERS_FIELD,
+                        value=self.render_multipliers(settings.role_multipliers),
+                        inline=False)
         if channels or roles:
             embed.set_footer(text=SETTINGS_PRUNED.format(channels=channels,
                                                          roles=roles))
@@ -632,6 +794,25 @@ class Levels(commands.Cog):
         lines = [template.format(target_id=target_id)
                  for target_id in sorted(target_ids)[:limit]]
         rest = len(target_ids) - limit
+        if rest > 0:
+            lines.append(SETTINGS_MORE.format(count=rest))
+        return "\n".join(lines)
+
+    def render_multipliers(self, multipliers: dict[int, float],
+                           limit: int = MULTIPLIER_LIST_LIMIT) -> str:
+        """One embed field listing the roles with an XP multiplier.
+
+        Sorted by multiplier, best first: the roles worth looking at are the
+        ones on top, and the order stays the same between two runs.
+        """
+        if not multipliers:
+            return MULTIPLIER_NO_ROLES
+        ordered = sorted(multipliers.items(), key=lambda item: (-item[1],
+                                                                 item[0]))
+        lines = [MULTIPLIER_TARGET.format(
+            role_id=role_id, multiplier=self.show_multiplier(value))
+            for role_id, value in ordered[:limit]]
+        rest = len(ordered) - limit
         if rest > 0:
             lines.append(SETTINGS_MORE.format(count=rest))
         return "\n".join(lines)
@@ -697,6 +878,10 @@ class Levels(commands.Cog):
             if guild.get_role(role_id) is None:
                 await remove_ignored_role(guild.id, role_id)
                 roles += 1
+        for role_id in sorted(settings.role_multipliers):
+            if guild.get_role(role_id) is None:
+                await remove_role_multiplier(guild.id, role_id)
+                roles += 1
         if channels or roles:
             self.log.info("Dropped %s channel(s) and %s role(s) that no longer "
                           "exist from the ignore lists of guild %s",
@@ -721,8 +906,10 @@ class Levels(commands.Cog):
 
     @commands.Cog.listener()
     async def on_guild_role_delete(self, role: discord.Role) -> None:
-        """Forget a deleted role from the ignore list."""
-        if await remove_ignored_role(role.guild.id, role.id):
+        """Forget a deleted role from the ignore list and the multipliers."""
+        ignored = await remove_ignored_role(role.guild.id, role.id)
+        multiplied = await remove_role_multiplier(role.guild.id, role.id)
+        if ignored or multiplied:
             self.forget_settings(role.guild.id)
 
     # ---------------------------------------------------------------- errors

@@ -172,6 +172,14 @@ async def init_db():
                 PRIMARY KEY (guild_id, channel_id)
             )""")
 
+        # roles that earn a multiplied amount of XP, e.g. 1.25
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS role_multipliers (
+                guild_id INTEGER NOT NULL, role_id INTEGER NOT NULL,
+                multiplier REAL NOT NULL,
+                PRIMARY KEY (guild_id, role_id)
+            )""")
+
         # seeding by the unique code keeps this idempotent and never
         # overwrites a price that was changed later
         await db.execute(
@@ -1188,3 +1196,73 @@ async def clear_greeting_channel(guild_id, channel_id):
             (time.time(), guild_id, channel_id))
         await db.commit()
         return cursor.rowcount > 0
+# --------------------------------------------------------------------------
+# Role XP multipliers
+#
+# Which roles earn a multiplied amount of XP. A role is either on this list
+# (with its multiplier) or not; there is no entry for a plain 1x role.
+# --------------------------------------------------------------------------
+
+async def list_role_multipliers(guild_id):
+    """The XP multipliers of a guild as {role_id: multiplier}.
+
+    A dict rather than a set like the ignore lists use, since a multiplier is
+    a number the levels cog has to read on every XP award.
+    """
+    async with _connect() as db:
+        async with db.execute(
+                "SELECT role_id, multiplier FROM role_multipliers"
+                " WHERE guild_id=?", (guild_id,)) as cur:
+            return {row[0]: row[1] for row in await cur.fetchall()}
+
+
+async def set_role_multiplier(guild_id, role_id, multiplier):
+    """Make `role_id` earn `multiplier` times the XP. False when unchanged.
+
+    The stored value is compared first: an upsert reports a row as written even
+    when it wrote the same number back, which would make a repeated command
+    look like a change.
+    """
+    multiplier = float(multiplier)
+    async with _connect() as db:
+        async with db.execute(
+                "SELECT multiplier FROM role_multipliers"
+                " WHERE guild_id=? AND role_id=?",
+                (guild_id, role_id)) as cur:
+            row = await cur.fetchone()
+        if row is not None and row[0] == multiplier:
+            return False
+        await db.execute(
+            """INSERT INTO role_multipliers (guild_id, role_id, multiplier)
+               VALUES (?, ?, ?)
+               ON CONFLICT (guild_id, role_id) DO UPDATE
+               SET multiplier = excluded.multiplier""",
+            (guild_id, role_id, multiplier))
+        await db.commit()
+        return True
+
+
+async def remove_role_multiplier(guild_id, role_id):
+    """Drop the multiplier of `role_id`. False when it had none.
+
+    Also call this from `on_guild_role_delete` to drop stale ids.
+    """
+    async with _connect() as db:
+        cursor = await db.execute(
+            "DELETE FROM role_multipliers WHERE guild_id=? AND role_id=?",
+            (guild_id, role_id))
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def clear_role_multipliers(guild_id):
+    """Drop every multiplier of a guild, which puts everybody back on 1x.
+
+    Returns how many roles were dropped.
+    """
+    async with _connect() as db:
+        cursor = await db.execute(
+            "DELETE FROM role_multipliers WHERE guild_id=?", (guild_id,))
+        await db.commit()
+        return cursor.rowcount
+
