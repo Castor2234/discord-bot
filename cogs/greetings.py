@@ -32,14 +32,14 @@ from db import (
 GREET_BOTS = False              # bots are skipped unless this is turned on
 
 # user facing texts
-MEMBER_COUNT_FIELD = "Members"
-ACCOUNT_BORN_FIELD = "Account created"
+MEMBER_COUNT_FIELD = "Член сервера №"
+ACCOUNT_BORN_FIELD = "Аккаунт создан"
 ACCOUNT_AGE_FIELD = "Account age"
 ACCOUNT_AGE_DAYS = "{days} day(s) old"
 DATE_FORMAT = "%Y-%m-%d"
 
-WELCOME_TITLE = "\U0001F44B Welcome to **{guild}**, {member}!"
-FAREWELL_TITLE = "\U0001F44B **{member}** just left **{guild}**."
+WELCOME_TITLE = "<:pudge:1554517617434296320> Добро пожаловать на **{guild}**, {member}!"
+FAREWELL_TITLE = "<:venomancer:1555991531628929166> **{member}** покинул **{guild}**."
 
 PREVIEW_JOIN = "_(preview of the welcome message)_"
 PREVIEW_LEAVE = "_(preview of the goodbye message)_"
@@ -181,15 +181,11 @@ class Greetings(commands.Cog):
             color=discord.Color.blurple() if hello else discord.Color.greyple(),
         )
         embed.set_thumbnail(url=member.display_avatar.url)
-        embed.add_field(name=MEMBER_COUNT_FIELD, value=str(guild.member_count))
         if member.created_at is not None:
             embed.add_field(name=ACCOUNT_BORN_FIELD,
                             value=member.created_at.strftime(DATE_FORMAT),
                             inline=True)
-            embed.add_field(name=ACCOUNT_AGE_FIELD,
-                            value=ACCOUNT_AGE_DAYS.format(
-                                days=self.account_age_days(member)),
-                            inline=True)
+        embed.add_field(name=MEMBER_COUNT_FIELD, value=str(guild.member_count))
         return embed
 
     @staticmethod
