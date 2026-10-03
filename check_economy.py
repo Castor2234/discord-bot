@@ -93,13 +93,16 @@ def last(interaction):
 
 
 def win_text(bet, balance):
-    return ec.ROLL_WIN.format(mention=f"<@{USER_ID}>", bet=bet,
-                                 currency=ec.CURRENCY_NAME, balance=balance)
+    # the signed amounts are built here, since coins() carries no sign itself
+    return ec.ROLL_WIN.format(mention=f"<@{USER_ID}>", bet=ec.coins(bet),
+                              won=f"+{ec.coins(bet)}",
+                              balance=ec.coins(balance))
 
 
 def lose_text(bet, balance):
-    return ec.ROLL_LOSE.format(mention=f"<@{USER_ID}>", bet=bet,
-                                  currency=ec.CURRENCY_NAME, balance=balance)
+    return ec.ROLL_LOSE.format(mention=f"<@{USER_ID}>", bet=ec.coins(bet),
+                               lost=f"-{ec.coins(bet)}",
+                               balance=ec.coins(balance))
 
 
 async def balance():
@@ -215,8 +218,7 @@ async def main():
     await cog.transfer.callback(cog, interaction, friend, ec.TRANSFER_MAX_AMOUNT)
     check("transfer message", last(interaction), ec.TRANSFER_SENT.format(
         sender=f"<@{USER_ID}>", receiver=f"<@{FRIEND_ID}>",
-        amount=ec.TRANSFER_MAX_AMOUNT, balance=100,
-        currency=ec.CURRENCY_NAME))
+        amount=ec.coins(ec.TRANSFER_MAX_AMOUNT), balance=ec.coins(100)))
     check("sender paid 100", await balance(), 0)
     check("receiver got 100", await friend_balance(), 100)
 
@@ -233,8 +235,7 @@ async def main():
 
     # the free tier allows 100 at a time, so 101 is over the ceiling
     await refused_limit("amount over the free tier refused", friend, 101,
-                        ec.TRANSFER_TOO_HIGH.format(
-                            limit=100, currency=ec.CURRENCY_NAME))
+                        ec.TRANSFER_TOO_HIGH.format(limit=ec.coins(100)))
     check("an over-limit transfer takes nothing", await friend_balance(), 100)
 
     # the cooldown the free tier bought: a second transfer right away is refused
@@ -246,8 +247,8 @@ async def main():
     await db.add_balance(GUILD_ID, USER_ID, 30)
     await cog.transfer.callback(cog, interaction, friend, 7)
     check("small transfer message", last(interaction), ec.TRANSFER_SENT.format(
-        sender=f"<@{USER_ID}>", receiver=f"<@{FRIEND_ID}>", amount=7,
-        balance=107, currency=ec.CURRENCY_NAME))
+        sender=f"<@{USER_ID}>", receiver=f"<@{FRIEND_ID}>",
+        amount=ec.coins(7), balance=ec.coins(107)))
     check("sender paid 7 of 30", await balance(), 23)
     check("receiver got 7 more", await friend_balance(), 107)
     check("the second transfer is logged too",
@@ -274,9 +275,9 @@ async def main():
     # more than the sender's wallet holds: nothing moves (within the 100 cap)
     await refused("poor sender refused", friend, ec.TRANSFER_MAX_AMOUNT,
                   ec.TRANSFER_INSUFFICIENT.format(
-                      missing=ec.TRANSFER_MAX_AMOUNT - 23,
-                      amount=ec.TRANSFER_MAX_AMOUNT, balance=23,
-                      currency=ec.CURRENCY_NAME))
+                      missing=ec.coins(ec.TRANSFER_MAX_AMOUNT - 23),
+                      amount=ec.coins(ec.TRANSFER_MAX_AMOUNT),
+                      balance=ec.coins(23)))
     check("a refusal takes nothing", (await balance(), await friend_balance()),
           (23, 107))
     # a refused transfer must not burn the wait either: send_coins hands the slot
@@ -385,7 +386,7 @@ async def main():
     # -------------------------------------------------- the commands themselves
     await cog.shop_add.callback(cog, interaction, " 3X3 ", "Tic", 50)
     check("add lower cases the code", last(interaction),
-          ec.SHOP_ITEM_ADDED.format(name="Tic", code="3x3", price=50))
+          ec.SHOP_ITEM_ADDED.format(name="Tic", code="3x3", price=ec.coins(50)))
     await cog.shop_add.callback(cog, interaction, "3x3", "Tic again", 1)
     check("add refuses a taken code", last(interaction),
           ec.SHOP_ITEM_EXISTS.format(code="3x3"))
@@ -398,7 +399,8 @@ async def main():
 
     await cog.shop_setprice.callback(cog, interaction, "3x3", 60)
     check("setprice answer", last(interaction),
-          ec.SHOP_ITEM_PRICED.format(name="Tic", code="3x3", old=50, new=60))
+          ec.SHOP_ITEM_PRICED.format(name="Tic", code="3x3",
+                                     old=ec.coins(50), new=ec.coins(60)))
     await cog.shop_setprice.callback(cog, interaction, "zzz", 10)
     check("setprice of an unknown item", last(interaction),
           ec.SHOP_ITEM_NOT_FOUND.format(query="zzz"))
@@ -415,7 +417,7 @@ async def main():
 
     await cog.shop_restore.callback(cog, interaction, "3x3")
     check("restore answer", last(interaction),
-          ec.SHOP_ITEM_RESTORED.format(name="Tic", code="3x3", price=60))
+          ec.SHOP_ITEM_RESTORED.format(name="Tic", code="3x3", price=ec.coins(60)))
     await cog.shop_restore.callback(cog, interaction, "3x3")
     check("restore twice", last(interaction),
           ec.SHOP_ITEM_ALREADY_ON_SALE.format(name="Tic", code="3x3"))

@@ -38,6 +38,7 @@ from db import (
     set_role_multiplier,
     set_xp,
 )
+from cogs.economy import coins
 
 # ------------------------------------------------------------------ settings
 XP_MIN = 15                  # XP for a single message
@@ -80,7 +81,7 @@ MULTIPLIER_LIST_LIMIT = 9       # roles one field of /levels settings lists
 
 # user facing texts
 LEVEL_UP_MESSAGE = "🎉 {mention} теперь имеет **{level}** уровень!"
-LEVEL_UP_REWARD_MESSAGE = "+{coins} манго <:dota_mango:1554514974121009152>"
+LEVEL_UP_REWARD_MESSAGE = "{reward}"
 LEADERBOARD_TITLE = "🏆 Таблица лидеров {guild} "
 EMPTY_LEADERBOARD = "Таблица лидеров пока пуста"
 PERMISSION_ERROR = "Необходимы **Manage Server** права для использования этой команды."
@@ -369,17 +370,19 @@ class Levels(commands.Cog):
         `channel` is where the XP was earned; the settings decide whether the
         message stays there or goes to the configured announcement channel.
         """
-        coins = level_up_reward(level)
-        if coins:
-            await add_balance(guild.id, member.id, coins)
+        reward = level_up_reward(level)
+        if reward:
+            await add_balance(guild.id, member.id, reward)
         if settings is None:
             settings = await self.settings_for(guild.id)
         target = self.level_up_channel(guild, settings, channel)
         if target is None:
             return
         message = LEVEL_UP_MESSAGE.format(mention=member.mention, level=level)
-        if coins:
-            message += "\n" + LEVEL_UP_REWARD_MESSAGE.format(coins=coins)
+        if reward:
+            # the reward is positive, so the + is added here and not in coins()
+            message += "\n" + LEVEL_UP_REWARD_MESSAGE.format(
+                reward=f"+{coins(reward)}")
         try:
             await target.send(message)
         except discord.HTTPException:

@@ -38,7 +38,7 @@ from db import (
 
 # ------------------------------------------------------------------ settings
 MANGO_EMOJI = "<:dota_mango:1554514974121009152>"
-CURRENCY_NAME = f"манго"
+CURRENCY_NAME = "манго"
 SHOP_LOG_CHANNEL_ID: int | None = None   # staff channel for new orders
 SHOP_MAX_PRICE = 1_000_000               # largest price /shop setprice accepts
 SHOP_CODE_MAX = 32                       # longest code /shop add accepts
@@ -79,65 +79,65 @@ TRANSFER_MAX_AMOUNT = levels.transfer_max(0)
 TRANSFER_MAX_AMOUNT_LIMIT = levels.transfer_max(levels.max_tier("transfer"))
 
 # user facing texts
-BALANCE_MESSAGE = "Баланс пользователя {mention}: **{balance}** {currency}."
+BALANCE_MESSAGE = "Баланс пользователя {mention}: {balance}."
 SHOP_TITLE = "🛒 Магазин"
 SHOP_EMPTY = "Магазин пуст."
 SHOP_FOOTER = "Buy with `{prefix}shop buy <code>`."
-SHOP_ITEM_ADDED = "✅ Товар **{name}** (`{code}`) добавлен за {MANGO_EMOJI} {price}."
+SHOP_ITEM_ADDED = "✅ Товар **{name}** (`{code}`) добавлен за {price}."
 SHOP_ITEM_EXISTS = ("Товар с кодом `{code}` уже существует. Если он скрыт, "
                     "верните его командой `restore`.")
-SHOP_ITEM_PRICED = "✅ Цена **{name}** (`{code}`): {MANGO_EMOJI} {old} → {MANGO_EMOJI} {new}."
+SHOP_ITEM_PRICED = "✅ Цена **{name}** (`{code}`): {old} → {new}."
 SHOP_ITEM_HIDDEN = "🗑 Товар **{name}** (`{code}`) убран из магазина."
 SHOP_ITEM_ALREADY_HIDDEN = "Товар **{name}** (`{code}`) и так не в магазине."
-SHOP_ITEM_RESTORED = "♻️ Товар **{name}** (`{code}`) снова в магазине за {MANGO_EMOJI} {price}."
+SHOP_ITEM_RESTORED = "♻️ Товар **{name}** (`{code}`) снова в магазине за {price}."
 SHOP_ITEM_ALREADY_ON_SALE = "Товар **{name}** (`{code}`) и так в магазине."
 SHOP_ITEM_NOT_FOUND = "В магазине нет товара `{query}`."
 SHOP_BAD_CODE = ("Код должен быть 1-{max} символов, без пробелов и не только "
                  "из цифр.")
-SHOP_LINE = "**{name}** — {MANGO_EMOJI} {price} (`{code}`)\n{description}"
-PURCHASE_MESSAGE = ("🛒 Вы купили **{name}** за {MANGO_EMOJI} {price}. "
-                    "Баланс: {MANGO_EMOJI} {balance}. Заказ **#{order_id}**.")
-PURCHASE_LOG = ("🛒 {mention} купил **{name}** за {MANGO_EMOJI} {price} - "
+SHOP_LINE = "**{name}** — {price} (`{code}`)\n{description}"
+PURCHASE_MESSAGE = ("🛒 Вы купили **{name}** за {price}. "
+                    "Баланс: {balance}. Заказ **#{order_id}**.")
+PURCHASE_LOG = ("🛒 {mention} купил **{name}** за {price} - "
                 "заказ **#{order_id}** ({status})")
-INSUFFICIENT_FUNDS = "Не хватает еще **{missing}** {currency} (цена: {price})."
+INSUFFICIENT_FUNDS = "Не хватает еще {missing} (цена: {price})."
 ITEM_NOT_FOUND = "В магазине нет товара `{query}`. Доступные товары: {available}"
 ORDERS_TITLE = "🧾 Последние заказы"
 ORDERS_EMPTY = "Нет заказов."
-ORDER_LINE = "**#{order_id}** {mention} — {name}, {MANGO_EMOJI} {price}, `{status}`, {when}"
+ORDER_LINE = "**#{order_id}** {mention} — {name}, {price}, `{status}`, {when}"
 ORDER_UPDATED = "Заказ **#{order_id}** теперь `{status}`."
 ORDER_NOT_FOUND = "Заказа **#{order_id}** не существует."
-DAILY_CLAIMED = "<:pudge:1554517617434296320> Ежедневная награда получена: **{amount}** {currency}. Баланс: **{balance}** {currency}."
+DAILY_CLAIMED = "<:pudge:1554517617434296320> Ежедневная награда получена: {amount}. Баланс: {balance}."
 DAILY_WAITING = "Вы уже забрали ежедневную награду. Вернитесь спустя **{hours}ч {minutes}м**."
 DAILY_DISABLED = "Ежедневная награда отключена."
 ROLL_DESCRIPTION = (f"Рискни манго: "
                        f"{ROLL_WIN_CHANCE:.0%} удвоить, иначе потерять")
 ROLL_BET = f"Сколько манго поставить (1-{ROLL_MAX_BET})"
-ROLL_WIN = ("🎉 {mention} рискнул {bet} {currency} и **удвоил**! "
-               "Выигрыш: **+{bet}** {currency}. Баланс: **{balance}** {currency}.")
-ROLL_LOSE = ("💥 {mention} рискнул {bet} {currency} и **проиграл**. "
-                "Потеряно: **-{bet}** {currency}. Баланс: **{balance}** {currency}.")
+ROLL_WIN = ("🎉 {mention} рискнул {bet} и **удвоил**! "
+               "Выигрыш: {won}. Баланс: {balance}.")
+ROLL_LOSE = ("💥 {mention} рискнул {bet} и **проиграл**. "
+                "Потеряно: {lost}. Баланс: {balance}.")
 ROLL_DISABLED = "Улучшение отключено."
 COOLDOWN_MESSAGE = "Не так быстро! Попробуй ещё раз через **{seconds}** с."
 TRANSFER_DESCRIPTION = f"Передать манго другому участнику (1-{TRANSFER_MAX_AMOUNT})"
 TRANSFER_MEMBER = "Кому перевести"
 TRANSFER_AMOUNT = f"Сколько манго перевести (1-{TRANSFER_MAX_AMOUNT})"
-TRANSFER_SENT = ("✅ {sender} перевёл **{amount}** {currency} игроку {receiver}. "
-                 "Баланс получателя: **{balance}** {currency}.")
+TRANSFER_SENT = ("✅ {sender} перевёл {amount} игроку {receiver}. "
+                 "Баланс получателя: {balance}.")
 TRANSFER_DISABLED = "Переводы отключены."
 TRANSFER_SELF = "Нельзя перевести манго самому себе."
 TRANSFER_BAD_AMOUNT = "Сумма перевода должна быть от 1 до {max}."
-TRANSFER_INSUFFICIENT = ("Не хватает ещё **{missing}** {currency} "
-                         "(перевод **{amount}**, баланс **{balance}**).")
+TRANSFER_INSUFFICIENT = ("Не хватает ещё {missing} "
+                         "(перевод {amount}, баланс {balance}).")
 TRANSFER_NOT_FOR_BOTS = "Ботам нельзя переводить монеты."
-ROLL_BET_TOO_HIGH = ("Твоя ставка сейчас максимум **{limit}** {currency}. "
+ROLL_BET_TOO_HIGH = ("Твоя ставка сейчас максимум {limit}. "
                      "Купить повышение: `/upgrades`.")
-TRANSFER_TOO_HIGH = ("Твой лимит перевода сейчас **{limit}** {currency}. "
+TRANSFER_TOO_HIGH = ("Твой лимит перевода сейчас {limit}. "
                      "Купить повышение: `/upgrades`.")
 ADMIN_MAX_AMOUNT = 1_000_000             # largest single /addcoins or /removecoins
-ADMIN_ADDED = "✅ {mention} получает **{amount}** {currency}. Баланс: **{balance}** {currency}."
-ADMIN_REMOVED = "✅ У {mention} снято **{removed}** {currency}. Баланс: **{balance}** {currency}."
+ADMIN_ADDED = "✅ {mention} получает {amount}. Баланс: {balance}."
+ADMIN_REMOVED = "✅ У {mention} снято {removed}. Баланс: {balance}."
 ADMIN_REMOVED_PARTLY = ("✅ У {mention} было меньше, чем {amount}, снято только "
-                        "**{removed}** {currency}. Баланс: **{balance}** {currency}.")
+                        "{removed}. Баланс: {balance}.")
 ADMIN_NOT_FOR_BOTS = "Ботам нельзя выдавать или снимать монеты."
 PERMISSION_ERROR = "У тебя нет **Manage Server** прав для использования этой команды."
 MEMBER_NOT_FOUND_ERROR = "Не нашел такого пользователя."
@@ -148,7 +148,12 @@ _rng = random.SystemRandom()
 
 
 def coins(amount: int) -> str:
-    """Format a coin amount, e.g. ``{MANGO_EMOJI} 10 coins``."""
+    """The one way an amount is written, e.g. ``🥭 10 манго``.
+
+    MANGO_EMOJI leads, then the bare number, then CURRENCY_NAME. Deliberately
+    free of markdown: the upgrade cog reuses this for button labels, and
+    Discord renders a button label as plain text.
+    """
     return f"{MANGO_EMOJI} {amount} {CURRENCY_NAME}"
 
 
@@ -216,8 +221,7 @@ class Economy(commands.Cog):
         row = await get_user(interaction.guild.id, member.id)
         embed = discord.Embed(
             description=BALANCE_MESSAGE.format(mention=member.mention,
-                                               balance=row["balance"],
-                                               currency=CURRENCY_NAME),
+                                               balance=coins(row["balance"])),
             color=discord.Color.gold())
         embed.set_thumbnail(url=member.display_avatar.url)
         await interaction.response.send_message(embed=embed)
@@ -244,7 +248,7 @@ class Economy(commands.Cog):
                 ephemeral=True)
             return
         await interaction.response.send_message(DAILY_CLAIMED.format(
-            amount=amount, currency=CURRENCY_NAME, balance=balance))
+            amount=coins(amount), balance=coins(balance)))
 
     # --------------------------------------------------------------- roll
     @app_commands.command(name="roll", description=ROLL_DESCRIPTION)
@@ -272,9 +276,11 @@ class Economy(commands.Cog):
         if not played:
             raise InsufficientFunds(bet, balance)
         template = ROLL_WIN if won else ROLL_LOSE
+        # coins() carries no sign, so the win/loss amount adds it instead
         await interaction.response.send_message(template.format(
-            mention=interaction.user.mention, bet=bet,
-            currency=CURRENCY_NAME, balance=balance))
+            mention=interaction.user.mention, bet=coins(bet),
+            won=f"+{coins(bet)}", lost=f"-{coins(bet)}",
+            balance=coins(balance)))
 
     # ------------------------------------------------------------- transfer
     @app_commands.command(name="transfer", description=TRANSFER_DESCRIPTION)
@@ -313,8 +319,8 @@ class Economy(commands.Cog):
                           reason=f"admin:{interaction.user.id}")
         balance = (await get_user(interaction.guild.id, member.id))["balance"]
         await interaction.response.send_message(ADMIN_ADDED.format(
-            mention=member.mention, amount=amount, currency=CURRENCY_NAME,
-            balance=balance))
+            mention=member.mention, amount=coins(amount),
+            balance=coins(balance)))
 
     @app_commands.command(name="removecoins",
                           description="Take coins from a member (staff)")
@@ -334,8 +340,8 @@ class Economy(commands.Cog):
         balance = (await get_user(interaction.guild.id, member.id))["balance"]
         template = ADMIN_REMOVED if removed == amount else ADMIN_REMOVED_PARTLY
         await interaction.response.send_message(template.format(
-            mention=member.mention, amount=amount, removed=removed,
-            currency=CURRENCY_NAME, balance=balance))
+            mention=member.mention, amount=coins(amount),
+            removed=coins(removed), balance=coins(balance)))
 
     # ------------------------------------------------------------------ shop
     shop = app_commands.Group(name="shop",
@@ -354,8 +360,8 @@ class Economy(commands.Cog):
         shop_item, price, balance, order_id = await self.purchase(
             interaction.guild, interaction.user, item)
         await interaction.response.send_message(PURCHASE_MESSAGE.format(
-            name=shop_item["name"], price=price, balance=balance,
-            order_id=order_id), ephemeral=True)
+            name=shop_item["name"], price=coins(price),
+            balance=coins(balance), order_id=order_id), ephemeral=True)
         await self.notify_purchase(interaction.guild, interaction.user,
                                    shop_item, price, order_id)
 
@@ -379,7 +385,8 @@ class Economy(commands.Cog):
                                  time.localtime(row["purchased_at"]))
             lines.append(ORDER_LINE.format(
                 order_id=row["purchase_id"], mention=mention,
-                name=row["item_name"] or row["item_code"], price=row["price"],
+                name=row["item_name"] or row["item_code"],
+                price=coins(row["price"]),
                 status=row["status"], when=when))
         embed = discord.Embed(title=ORDERS_TITLE, description="\n".join(lines),
                               color=discord.Color.dark_gold())
@@ -426,14 +433,14 @@ class Economy(commands.Cog):
                 SHOP_ITEM_EXISTS.format(code=code), ephemeral=True)
             return
         await interaction.response.send_message(SHOP_ITEM_ADDED.format(
-            name=row["name"], code=row["code"], price=row["price"]),
+            name=row["name"], code=row["code"], price=coins(row["price"])),
             ephemeral=True)
 
     @shop.command(name="setprice",
                   description="Change the price of an item (staff)")
     @app_commands.checks.has_permissions(manage_guild=True)
     @app_commands.describe(code="Code (or numeric id) of the item",
-                           price="New price in coins")
+                           price="New price in mango")
     async def shop_setprice(
             self, interaction: discord.Interaction, code: str,
             price: app_commands.Range[int, 1, SHOP_MAX_PRICE]) -> None:
@@ -445,8 +452,8 @@ class Economy(commands.Cog):
                 SHOP_ITEM_NOT_FOUND.format(query=query), ephemeral=True)
             return
         await interaction.response.send_message(SHOP_ITEM_PRICED.format(
-            name=row["name"], code=row["code"], old=row["price"], new=price),
-            ephemeral=True)
+            name=row["name"], code=row["code"], old=coins(row["price"]),
+            new=coins(price)), ephemeral=True)
 
     @shop.command(name="hide",
                   description="Remove an item from the shop (staff)")
@@ -490,7 +497,7 @@ class Economy(commands.Cog):
                 ephemeral=True)
             return
         await interaction.response.send_message(SHOP_ITEM_RESTORED.format(
-            name=row["name"], code=row["code"], price=row["price"]),
+            name=row["name"], code=row["code"], price=coins(row["price"])),
             ephemeral=True)
 
     # ------------------------------------------------------------- internals
@@ -525,8 +532,8 @@ class Economy(commands.Cog):
                 interaction, status, amount))
         balance = (await get_user(interaction.guild.id, receiver.id))["balance"]
         await interaction.response.send_message(TRANSFER_SENT.format(
-            sender=sender.mention, receiver=receiver.mention, amount=amount,
-            currency=CURRENCY_NAME, balance=balance))
+            sender=sender.mention, receiver=receiver.mention,
+            amount=coins(amount), balance=coins(balance)))
 
     async def transfer_refusal(self, interaction: discord.Interaction,
                                status: str, amount: int) -> str:
@@ -538,9 +545,9 @@ class Economy(commands.Cog):
         # "insufficient": name the missing part, the way the shop does
         balance = (await get_user(interaction.guild.id,
                                   interaction.user.id))["balance"]
-        return TRANSFER_INSUFFICIENT.format(missing=amount - balance,
-                                            amount=amount, balance=balance,
-                                            currency=CURRENCY_NAME)
+        return TRANSFER_INSUFFICIENT.format(missing=coins(amount - balance),
+                                            amount=coins(amount),
+                                            balance=coins(balance))
 
     async def send_catalogue(self, interaction: discord.Interaction) -> None:
         """Post the list of active shop items."""
@@ -551,7 +558,7 @@ class Economy(commands.Cog):
         embed = discord.Embed(
             title=SHOP_TITLE,
             description="\n\n".join(
-                SHOP_LINE.format(name=item["name"], price=item["price"],
+                SHOP_LINE.format(name=item["name"], price=coins(item["price"]),
                                  code=item["code"],
                                  description=item["description"])
                 for item in items),
@@ -595,7 +602,7 @@ class Economy(commands.Cog):
             return
         try:
             await channel.send(PURCHASE_LOG.format(
-                mention=member.mention, name=item["name"], price=price,
+                mention=member.mention, name=item["name"], price=coins(price),
                 order_id=order_id, status=PENDING_STATUS))
         except discord.HTTPException:
             pass  # the order is recorded, the log message is a bonus
@@ -618,9 +625,9 @@ class Economy(commands.Cog):
     async def error_text(self, error: BaseException) -> str | None:
         """Turn a command error into a message, or None when unexpected."""
         if isinstance(error, InsufficientFunds):
-            return INSUFFICIENT_FUNDS.format(missing=error.price - error.balance,
-                                            price=error.price,
-                                            currency=CURRENCY_NAME)
+            return INSUFFICIENT_FUNDS.format(
+                missing=coins(error.price - error.balance),
+                price=coins(error.price))
         if isinstance(error, ItemNotFound):
             items = await get_shop_items()
             available = ", ".join(f"`{item['code']}`" for item in items) or "-"
@@ -630,11 +637,9 @@ class Economy(commands.Cog):
         # a bet or an amount over what this member bought; TransferTooHigh is the
         # BetTooHigh subclass, so it has to be tested first
         if isinstance(error, TransferTooHigh):
-            return TRANSFER_TOO_HIGH.format(limit=error.limit,
-                                            currency=CURRENCY_NAME)
+            return TRANSFER_TOO_HIGH.format(limit=coins(error.limit))
         if isinstance(error, BetTooHigh):
-            return ROLL_BET_TOO_HIGH.format(limit=error.limit,
-                                            currency=CURRENCY_NAME)
+            return ROLL_BET_TOO_HIGH.format(limit=coins(error.limit))
         if isinstance(error, TransferOnCooldown):
             return COOLDOWN_MESSAGE.format(
                 seconds=max(1, round(error.seconds_left)))

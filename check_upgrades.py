@@ -194,7 +194,7 @@ async def main():
           all(lv.effect(c, t) in embed.description
               for c in lv.CATEGORIES
               for t in range(lv.max_tier(c) + 1)), True)
-    check("an empty wallet shows 0", "**0**" in footer(interaction), True)
+    check("an empty wallet shows 0", ec.coins(0) in footer(interaction), True)
     check("the catalogue is ephemeral", interaction.response.ephemeral[-1], True)
 
     # only the very next step of each ladder is clickable
@@ -319,13 +319,13 @@ async def main():
     press = await click(view, "roll", 1)
     check("a click answers with the bought text", last(press),
           uc.UPGRADE_BOUGHT.format(
-              tier=1, effect=lv.effect("roll", 1), price=450, balance=1550,
-              currency=uc.CURRENCY_NAME))
+              tier=1, effect=lv.effect("roll", 1), price=ec.coins(450),
+              balance=ec.coins(1_550)))
     check("the click bought the tier", (await tiers())["roll"], 1)
     check("the click charged the price", await balance(), 1_550)
     check("the click is ephemeral", press.response.ephemeral[-1], True)
     check("the click re-renders with the new balance",
-          "**1550**" in footer(press), True)
+          ec.coins(1_550) in footer(press), True)
     check("the bought tier shows as owned in the new embed",
           "✅" in str(press.response.sent[-1]["embed"].description), True)
     check("the next step of that ladder is now the open one",
@@ -355,8 +355,9 @@ async def main():
     view = interaction.response.sent[-1]["view"]
     poor = await click(view, "daily", 1)
     check("a poor click is refused", last(poor),
-          uc.UPGRADE_INSUFFICIENT.format(missing=90, price=100, balance=10,
-                                         currency=uc.CURRENCY_NAME))
+          uc.UPGRADE_INSUFFICIENT.format(missing=ec.coins(90),
+                                         price=ec.coins(100),
+                                         balance=ec.coins(10)))
     check("a poor click takes nothing", await balance(), 10)
     check("a poor click grants nothing", (await tiers())["daily"], 0)
 
@@ -398,8 +399,7 @@ async def main():
           uc.USER_UPGRADES_TITLE.format(member=other.user.display_name))
     check("their avatar is the thumbnail", shown.thumbnail.url, Avatar.url)
     check("the footer is their balance", shown.footer.text,
-          uc.USER_UPGRADES_FOOTER.format(balance=250,
-                                         currency=uc.CURRENCY_NAME))
+          uc.USER_UPGRADES_FOOTER.format(balance=ec.coins(250)))
     current = [line for line in shown.description.splitlines()
                if "*(сейчас)*" in line]
     check("every ladder marks its current tier", len(current), len(lv.CATEGORIES))
@@ -433,8 +433,7 @@ async def main():
     check("no member means you", mine.title,
           uc.USER_UPGRADES_TITLE.format(member=interaction.user.display_name))
     check("your own balance is shown", mine.footer.text,
-          uc.USER_UPGRADES_FOOTER.format(balance=await balance(),
-                                         currency=uc.CURRENCY_NAME))
+          uc.USER_UPGRADES_FOOTER.format(balance=ec.coins(await balance())))
 
     # and the feature flag closes the read-only view as well
     uc.UPGRADES_ENABLED = False

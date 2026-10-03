@@ -25,9 +25,9 @@ from discord.ext import commands
 
 import upgrade_levels as levels
 from db import buy_upgrade, get_user, get_user_upgrades
+from cogs.economy import coins
 
 # ------------------------------------------------------------------ settings
-CURRENCY_NAME = "манго <:dota_mango:1554514974121009152>"
 UPGRADES_ENABLED = True
 
 # the three ladders, in the order the embed lists them
@@ -39,19 +39,19 @@ CATEGORY_LABELS = {
 
 # user facing texts
 UPGRADES_TITLE = "⬆️ Улучшения"
-UPGRADES_FOOTER = "Твой баланс: **{balance}** {currency} · купить кнопками ниже"
+UPGRADES_FOOTER = "Твой баланс: {balance} · купить кнопками ниже"
 UPGRADES_DISABLED = "Улучшения отключены."
 UPGRADE_DESCRIPTION = "Улучшить /daily, /roll и /transfer за манго"
 USER_UPGRADES_DESCRIPTION = "Показать улучшения участника"
 USER_UPGRADES_MEMBER = "Чьи улучшения показать (по умолчанию — ваши)"
 USER_UPGRADES_TITLE = "⬆️ Улучшения — {member}"
-USER_UPGRADES_FOOTER = "Баланс: **{balance}** {currency}"
+USER_UPGRADES_FOOTER = "Баланс: {balance}"
 
 UPGRADE_BOUGHT = ("✅ Куплено ур. **{tier}**: {effect}. "
-                  "Цена 🫵 {price}. "
-                  "Баланс: **{balance}** {currency}.")
-UPGRADE_INSUFFICIENT = ("Не хватает 🫵 **{missing}** {currency} "
-                        "(нужно **{price}**, баланс **{balance}**).")
+                  "Цена {price}. "
+                  "Баланс: {balance}.")
+UPGRADE_INSUFFICIENT = ("Не хватает {missing} "
+                        "(нужно {price}, баланс {balance}).")
 UPGRADE_SEQUENTIAL = "Сначала купи предыдущий уровень."
 UPGRADE_OWNED = "Этот уровень уже куплен."
 UPGRADE_MAXED = "Здесь выше ничего нет — максимальный уровень."
@@ -63,8 +63,9 @@ UPGRADE_OWNED_MARK = "✅"
 UPGRADE_NEXT_MARK = "💰"
 UPGRADE_LOCKED_MARK = "🔒"
 
-# what a button reads, e.g. "💰 Ур. 1 — 🫵 100"
-BUTTON_LABEL = "{mark} Ур. {tier} — 🫵 {price}"
+# what a button reads, e.g. "💰 Ур. 1 — 🥭 100 манго"; a label is plain text
+# on Discord, so coins() must stay free of markdown
+BUTTON_LABEL = "{mark} Ур. {tier} — {price}"
 BUTTON_LABEL_OWNED = "✅ Ур. {tier}"
 
 
@@ -136,8 +137,7 @@ class Upgrades(commands.Cog):
             for category in levels.CATEGORIES)
         embed = discord.Embed(title=title, description=description,
                               color=discord.Color.purple())
-        embed.set_footer(text=footer.format(balance=balance,
-                                            currency=CURRENCY_NAME))
+        embed.set_footer(text=footer.format(balance=coins(balance)))
         return embed
 
     def tier_line(self, category: str, tier: int, owned: int) -> str:
@@ -149,8 +149,8 @@ class Upgrades(commands.Cog):
         if tier < owned:
             return f"{UPGRADE_OWNED_MARK} Ур. {tier} — {effect}"
         if tier == owned + 1:
-            return f"{UPGRADE_NEXT_MARK} **Ур. {tier}** — {effect} — 🫵 {price}"
-        return f"{UPGRADE_LOCKED_MARK} Ур. {tier} — {effect} — 🫵 {price}"
+            return f"{UPGRADE_NEXT_MARK} **Ур. {tier}** — {effect} — {coins(price)}"
+        return f"{UPGRADE_LOCKED_MARK} Ур. {tier} — {effect} — {coins(price)}"
 
     # ----------------------------------------------------------------- buying
     async def buy(self, interaction: discord.Interaction, category: str,
@@ -173,8 +173,8 @@ class Upgrades(commands.Cog):
         await interaction.response.send_message(
             UPGRADE_BOUGHT.format(tier=tier,
                                   effect=levels.effect(category, tier),
-                                  price=price, balance=balance,
-                                  currency=CURRENCY_NAME),
+                                  price=coins(price),
+                                  balance=coins(balance)),
             embed=self.build_embed(tiers, balance),
             view=UpgradeView(self, tiers, balance, interaction.user.id),
             ephemeral=True)
@@ -182,9 +182,9 @@ class Upgrades(commands.Cog):
     def refusal_text(self, status: str, price: int, balance: int) -> str:
         """Why db.buy_upgrade said no, in the user's words."""
         if status == "insufficient":
-            return UPGRADE_INSUFFICIENT.format(missing=price - balance,
-                                               price=price, balance=balance,
-                                               currency=CURRENCY_NAME)
+            return UPGRADE_INSUFFICIENT.format(missing=coins(price - balance),
+                                               price=coins(price),
+                                               balance=coins(balance))
         if status == "sequential":
             return UPGRADE_SEQUENTIAL
         if status == "owned":
@@ -215,7 +215,8 @@ class UpgradeView(discord.ui.View):
                 mark = (UPGRADE_NEXT_MARK if tier == owned + 1
                         else UPGRADE_LOCKED_MARK)
                 button = discord.ui.Button(
-                    label=BUTTON_LABEL.format(mark=mark, tier=tier, price=price),
+                    label=BUTTON_LABEL.format(mark=mark, tier=tier,
+                                            price=coins(price)),
                     style=discord.ButtonStyle.primary,
                     custom_id=f"upgrade:{category}:{tier}", row=row)
                 if tier <= owned:
