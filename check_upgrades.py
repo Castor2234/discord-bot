@@ -46,10 +46,16 @@ def check(name, got, want):
         print(f"FAIL {name}: {got!r} != {want!r}")
 
 
+class Avatar:
+    url = "https://example.invalid/avatar.png"
+
+
 class User:
     def __init__(self, user_id=USER_ID, bot=False):
         self.id = user_id
         self.mention = f"<@{user_id}>"
+        self.display_name = f"user{user_id}"
+        self.display_avatar = Avatar()
         self.bot = bot
 
 
@@ -368,6 +374,72 @@ async def main():
     check("a disabled catalogue says so", last(interaction), uc.UPGRADES_DISABLED)
     check("and is still ephemeral", interaction.response.ephemeral[-1], True)
     check("and takes no tier", (await tiers())["daily"], 1)
+    uc.UPGRADES_ENABLED = True
+
+    # ------------------------------------------ /userupgrades, another member
+    OTHER_ID = 4321
+    await reset_tiers(OTHER_ID)
+    # 100 + 450 + 1000 buys the three steps below, which leaves 250 in the wallet
+    await db.add_balance(GUILD_ID, OTHER_ID, 1_800)
+    for category, tier in (("daily", 1), ("roll", 1), ("roll", 2)):
+        check(f"the other member buys {category} tier {tier}",
+              (await db.buy_upgrade(GUILD_ID, OTHER_ID, category, tier))[0], "ok")
+    check("and pays the catalogue price for them", await balance(OTHER_ID), 250)
+
+    command = bot.tree.get_command("userupgrades")
+    check("/userupgrades asks only for a member",
+          sorted(p.name for p in command.parameters), ["member"])
+    check("/userupgrades is guild only", command.guild_only, True)
+
+    other = Interaction(OTHER_ID)
+    await cog.userupgrades.callback(cog, interaction, other.user)
+    shown = interaction.response.sent[-1]["embed"]
+    check("the title names the member", shown.title,
+          uc.USER_UPGRADES_TITLE.format(member=other.user.display_name))
+    check("their avatar is the thumbnail", shown.thumbnail.url, Avatar.url)
+    check("the footer is their balance", shown.footer.text,
+          uc.USER_UPGRADES_FOOTER.format(balance=250,
+                                         currency=uc.CURRENCY_NAME))
+    current = [line for line in shown.description.splitlines()
+               if "*(сейчас)*" in line]
+    check("every ladder marks its current tier", len(current), len(lv.CATEGORIES))
+    check("their roll tier 2 is the current one",
+          any("Ур. 2" in line and lv.effect("roll", 2) in line
+              for line in current), True)
+    check("their daily tier 1 is the current one",
+          any("Ур. 1" in line and lv.effect("daily", 1) in line
+              for line in current), True)
+    check("their transfer ladder is still free",
+          any(lv.effect("transfer", 0) in line for line in current), True)
+    check("my own maxed roll tier is not shown as theirs",
+          any(lv.effect("roll", 3) in line for line in current), False)
+    check("looking at somebody is not ephemeral",
+          interaction.response.ephemeral[-1], False)
+    check("and hands out no buttons to spend with",
+          interaction.response.sent[-1]["view"], None)
+    check("and changes nothing of theirs",
+          await db.get_user_upgrades(GUILD_ID, OTHER_ID),
+          {"daily": 1, "roll": 2, "transfer": 0})
+
+    # a member who never bought anything still gets an answer: all free tiers
+    await cog.userupgrades.callback(cog, interaction, User(5555))
+    fresh = interaction.response.sent[-1]["embed"]
+    check("a member with no row shows the free tiers",
+          all(lv.effect(c, 0) in fresh.description for c in lv.CATEGORIES), True)
+
+    # naming nobody shows your own ladder
+    await cog.userupgrades.callback(cog, interaction)
+    mine = interaction.response.sent[-1]["embed"]
+    check("no member means you", mine.title,
+          uc.USER_UPGRADES_TITLE.format(member=interaction.user.display_name))
+    check("your own balance is shown", mine.footer.text,
+          uc.USER_UPGRADES_FOOTER.format(balance=await balance(),
+                                         currency=uc.CURRENCY_NAME))
+
+    # and the feature flag closes the read-only view as well
+    uc.UPGRADES_ENABLED = False
+    await cog.userupgrades.callback(cog, interaction, other.user)
+    check("a disabled ladder says so", last(interaction), uc.UPGRADES_DISABLED)
     uc.UPGRADES_ENABLED = True
 
     print("\n" + ("ALL GOOD" if not failures

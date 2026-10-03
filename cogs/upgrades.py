@@ -9,6 +9,10 @@ obvious follow-up to seeing the price, and one embed keeps both in one place.
 The reply is ephemeral and the view only answers the member it was rendered
 for, so nobody can ever spend somebody else`s mango.
 
+`/userupgrades` looks at the same ladder for somebody else and is deliberately
+read-only: it sends no buttons at all, because the buy view is bound to the one
+member it was rendered for.
+
 Buying goes through db.buy_upgrade, which takes the coins and raises the tier in
 ONE transaction, so an upgrade can never be paid for and lost.
 """
@@ -38,6 +42,10 @@ UPGRADES_TITLE = "⬆️ Улучшения"
 UPGRADES_FOOTER = "Твой баланс: **{balance}** {currency} · купить кнопками ниже"
 UPGRADES_DISABLED = "Улучшения отключены."
 UPGRADE_DESCRIPTION = "Улучшить /daily, /roll и /transfer за манго"
+USER_UPGRADES_DESCRIPTION = "Показать улучшения участника"
+USER_UPGRADES_MEMBER = "Чьи улучшения показать (по умолчанию — ваши)"
+USER_UPGRADES_TITLE = "⬆️ Улучшения — {member}"
+USER_UPGRADES_FOOTER = "Баланс: **{balance}** {currency}"
 
 UPGRADE_BOUGHT = ("✅ Куплено ур. **{tier}**: {effect}. "
                   "Цена 🫵 {price}. "
@@ -85,19 +93,51 @@ class Upgrades(commands.Cog):
             view=UpgradeView(self, tiers, balance, interaction.user.id),
             ephemeral=True)
 
+    @app_commands.command(name="userupgrades",
+                          description=USER_UPGRADES_DESCRIPTION)
+    @app_commands.guild_only()
+    @app_commands.describe(member=USER_UPGRADES_MEMBER)
+    async def userupgrades(self, interaction: discord.Interaction,
+                           member: discord.Member | None = None) -> None:
+        """Show the upgrades of a member (yours by default).
+
+        Read-only on purpose: the buttons live on /upgrades, where the view is
+        bound to the member it was rendered for. Sending a buy view here would
+        let one member spend another member`s mango by accident.
+        """
+        if not UPGRADES_ENABLED:
+            await interaction.response.send_message(UPGRADES_DISABLED,
+                                                    ephemeral=True)
+            return
+        member = member or interaction.user
+        tiers = await get_user_upgrades(interaction.guild.id, member.id)
+        balance = (await get_user(interaction.guild.id, member.id))["balance"]
+        embed = self.build_embed(
+            tiers, balance,
+            title=USER_UPGRADES_TITLE.format(member=member.display_name),
+            footer=USER_UPGRADES_FOOTER)
+        embed.set_thumbnail(url=member.display_avatar.url)
+        await interaction.response.send_message(embed=embed)
+
     # --------------------------------------------------------------- building
-    def build_embed(self, tiers: dict, balance: int) -> discord.Embed:
-        """The catalogue: one block per category, one line per tier."""
+    def build_embed(self, tiers: dict, balance: int,
+                    title: str = UPGRADES_TITLE,
+                    footer: str = UPGRADES_FOOTER) -> discord.Embed:
+        """The catalogue: one block per category, one line per tier.
+
+        `title` and `footer` are swapped by the read-only view, which looks at
+        somebody else`s ladder and must not promise buttons it does not send.
+        """
         description = "\n\n".join(
             "**{}**\n{}".format(
                 CATEGORY_LABELS[category],
                 "\n".join(self.tier_line(category, tier, tiers[category])
                           for tier in range(levels.max_tier(category) + 1)))
             for category in levels.CATEGORIES)
-        embed = discord.Embed(title=UPGRADES_TITLE, description=description,
+        embed = discord.Embed(title=title, description=description,
                               color=discord.Color.purple())
-        embed.set_footer(text=UPGRADES_FOOTER.format(
-            balance=balance, currency=CURRENCY_NAME))
+        embed.set_footer(text=footer.format(balance=balance,
+                                            currency=CURRENCY_NAME))
         return embed
 
     def tier_line(self, category: str, tier: int, owned: int) -> str:
