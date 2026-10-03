@@ -559,6 +559,39 @@ async def main():
     check("dead multiplier pruned",
           (await cog.load_settings(GUILD_ID)).role_multipliers, {})
 
+    # stacking is opt-in, so the default path above never touched it: flip the
+    # switch and make sure the bonuses add up (and cannot fall through zero)
+    was_stacking = lv.MULTIPLIER_STACKS
+    lv.MULTIPLIER_STACKS = True
+    try:
+        stacked = lv.GuildLevelSettings(role_multipliers={
+            BOOST_ROLE_ID: 1.25, BIG_BOOST_ROLE_ID: 1.5, HALF_ROLE_ID: 0.5})
+        check("stacked adds the bonuses",
+              stacked.multiplier_for(boost(BOOST_ROLE_ID, BIG_BOOST_ROLE_ID)),
+              1.75)
+        check("stacked two of a kind",
+              stacked.multiplier_for(boost(BIG_BOOST_ROLE_ID,
+                                           BIG_BOOST_ROLE_ID)), 2.0)
+        check("stacked with no role", stacked.multiplier_for(Member()), 1.0)
+        # a penalty role drags the other roles down with it
+        check("stacked penalty and bonus",
+              stacked.multiplier_for(boost(HALF_ROLE_ID, BOOST_ROLE_ID)), 0.75)
+        # two penalties would add up past 1x without a floor
+        check("stacked penalties stop at the floor",
+              stacked.multiplier_for(boost(HALF_ROLE_ID, HALF_ROLE_ID)),
+              lv.MULTIPLIER_MIN)
+        check("stacked penalties never go negative",
+              lv.GuildLevelSettings(
+                  role_multipliers={HALF_ROLE_ID: lv.MULTIPLIER_MIN}
+              ).multiplier_for(boost(HALF_ROLE_ID, HALF_ROLE_ID)),
+              lv.MULTIPLIER_MIN)
+    finally:
+        lv.MULTIPLIER_STACKS = was_stacking
+    check("stacking off again",
+          lv.GuildLevelSettings(role_multipliers={HALF_ROLE_ID: 0.5}
+                                ).multiplier_for(boost(HALF_ROLE_ID,
+                                                       HALF_ROLE_ID)), 0.5)
+
     # a second server starts from the defaults
     other = await cog.load_settings(4242)
     check("other server channel", other.level_up_channel_id,

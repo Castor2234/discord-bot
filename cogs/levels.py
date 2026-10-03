@@ -75,7 +75,7 @@ MULTIPLIER_MAX = 10.0           # ... or above this
 MULTIPLIER_STEP = 0.05          # how much one press of the slider moves it
 MULTIPLIER_DECIMALS = 2         # what /levels multiplier stores and shows
 MULTIPLIER_DEFAULT = 1.0        # a member with no booster role
-MULTIPLIER_STACKS = False       # True = the boosters of a member add up
+MULTIPLIER_STACKS = True       # True = the boosters of a member add up
 MULTIPLIER_LIST_LIMIT = 9       # roles one field of /levels settings lists
 
 # user facing texts
@@ -213,8 +213,13 @@ class GuildLevelSettings:
         if not values:
             return MULTIPLIER_DEFAULT
         if MULTIPLIER_STACKS:
-            # 1x per role plus the bonus of each role on top of it
-            return MULTIPLIER_DEFAULT + sum(value - 1.0 for value in values)
+            # 1x per member plus the bonus of each of their roles on top of it.
+            # A penalty role has a negative bonus, so several of them could add
+            # up past 1x and leave a member earning nothing (or a negative
+            # multiplier); the same floor a single role is held to keeps the
+            # total at least MULTIPLIER_MIN.
+            total = MULTIPLIER_DEFAULT + sum(value - 1.0 for value in values)
+            return max(MULTIPLIER_MIN, total)
         return max(values)
 
 
