@@ -216,7 +216,7 @@ class UpgradeView(discord.ui.View):
                         else UPGRADE_LOCKED_MARK)
                 button = discord.ui.Button(
                     label=BUTTON_LABEL.format(mark=mark, tier=tier,
-                                            price=coins(price)),
+                                            price=price),
                     style=discord.ButtonStyle.primary,
                     custom_id=f"upgrade:{category}:{tier}", row=row)
                 if tier <= owned:
