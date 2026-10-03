@@ -144,6 +144,15 @@ async def init_db():
             # they own their settings and must not be seeded again
             await db.execute("UPDATE guild_settings SET defaults_seeded = 1")
 
+        # the greetings cog came after these databases were written; the
+        # defaults keep every server quiet until it picks a channel itself
+        await _ensure_column(db, "guild_settings", "greeting_channel_id",
+                             "INTEGER")
+        await _ensure_column(db, "guild_settings", "greeting_join",
+                             "INTEGER NOT NULL DEFAULT 0")
+        await _ensure_column(db, "guild_settings", "greeting_leave",
+                             "INTEGER NOT NULL DEFAULT 0")
+
         await db.execute("""
             CREATE TABLE IF NOT EXISTS ignored_channels (
                 guild_id INTEGER NOT NULL, channel_id INTEGER NOT NULL,
@@ -1114,3 +1123,68 @@ async def remove_ignored_role(guild_id, role_id):
     """
     return await _remove_ignored("ignored_roles", "role_id",
                                  guild_id, role_id)
+
+# --------------------------------------------------------------------------
+# Greetings
+#
+# Where the welcome and the goodbye message of a server go, and whether each
+# of the two events is announced at all. A NULL channel_id means the server
+# never picked a channel, and then nothing is ever sent.
+# --------------------------------------------------------------------------
+
+async def set_greeting_channel(guild_id, channel_id):
+    """Send both greetings to `channel_id`, None resets to no channel.
+
+    The two switches follow the channel: they only mean something while there
+    is somewhere to post to, so a reset turns them off as well.
+    """
+    enabled = int(channel_id is not None)
+    async with _connect() as db:
+        await db.execute(
+            """INSERT INTO guild_settings
+               (guild_id, greeting_channel_id, greeting_join, greeting_leave,
+                updated_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT (guild_id) DO UPDATE
+               SET greeting_channel_id = excluded.greeting_channel_id,
+                   greeting_join = excluded.greeting_join,
+                   greeting_leave = excluded.greeting_leave,
+                   updated_at = excluded.updated_at""",
+            (guild_id, channel_id, enabled, enabled, time.time()))
+        await db.commit()
+
+
+async def set_greeting_switches(guild_id, greet_join=None, greet_leave=None):
+    """Turn the welcome / the goodbye message on or off.
+
+    `None` leaves a switch alone, so a caller can change one of the two without
+    reading the other first.
+    """
+    async with _connect() as db:
+        await db.execute(
+            """INSERT INTO guild_settings
+               (guild_id, greeting_join, greeting_leave, updated_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT (guild_id) DO UPDATE
+               SET greeting_join = COALESCE(?, greeting_join),
+                   greeting_leave = COALESCE(?, greeting_leave),
+                   updated_at = excluded.updated_at""",
+            (guild_id, int(bool(greet_join)), int(bool(greet_leave)),
+             time.time(),
+             None if greet_join is None else int(greet_join),
+             None if greet_leave is None else int(greet_leave)))
+        await db.commit()
+
+
+async def clear_greeting_channel(guild_id, channel_id):
+    """Forget a greeting channel that was deleted. True when it was set."""
+    async with _connect() as db:
+        cursor = await db.execute(
+            """UPDATE guild_settings
+               SET greeting_channel_id = NULL,
+                   greeting_join = 0, greeting_leave = 0,
+                   updated_at = ?
+               WHERE guild_id=? AND greeting_channel_id=?""",
+            (time.time(), guild_id, channel_id))
+        await db.commit()
+        return cursor.rowcount > 0
