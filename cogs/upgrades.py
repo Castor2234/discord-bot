@@ -36,7 +36,7 @@ CATEGORY_LABELS = {
     "daily": "🎁 Ежедневная награда — /daily",
     "roll": "🎲 /roll — ставка",
     "transfer": "💸 /transfer — лимит и перезарядка",
-    "chaos": "🌀 /chaosroll — ставка, шансы и перезарядка",
+    "chaos": "🌀 /chaosroll — ставка, перезарядка и увеличение шансов (на 3 лвле есть шанс 10x)",
 }
 
 # user facing texts
