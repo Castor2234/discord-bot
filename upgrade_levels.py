@@ -21,7 +21,7 @@ TRANSFER_TIERS = ((100, 60.0), (200, 30.0), (500, 20.0), (1000, 10.0))
 # free level of every ladder, and for /chaosroll that level is locked: a bet
 # can never be 1 coin, so 0 means "the command refuses tier 0" (the cooldown
 # there is only a placeholder, it is never spent).
-CHAOS_TIERS = ((0, 180.0), (100, 60.0), (200, 30.0), (300, 10.0))
+CHAOS_TIERS = ((0, 180.0), (100, 10.0), (200, 5.0), (300, 3.0))
 
 # multiplier -> probability of that payout at each tier (index = tier). What
 # the table does not spend is a lost bet (0x): 64% / 58% / 54.9%, so a higher
