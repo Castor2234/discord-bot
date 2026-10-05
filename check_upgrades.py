@@ -135,7 +135,8 @@ async def reset_tiers(user_id=USER_ID):
             (GUILD_ID, user_id))
         await conn.execute(
             "UPDATE user_upgrades SET daily_tier=0, roll_tier=0, "
-            "transfer_tier=0 WHERE guild_id=? AND user_id=?", (GUILD_ID, user_id))
+            "transfer_tier=0, chaos_tier=0 WHERE guild_id=? AND user_id=?",
+            (GUILD_ID, user_id))
         await conn.commit()
 
 
@@ -419,7 +420,7 @@ async def main():
           interaction.response.sent[-1]["view"], None)
     check("and changes nothing of theirs",
           await db.get_user_upgrades(GUILD_ID, OTHER_ID),
-          {"daily": 1, "roll": 2, "transfer": 0})
+          {"daily": 1, "roll": 2, "transfer": 0, "chaos": 0})
 
     # a member who never bought anything still gets an answer: all free tiers
     await cog.userupgrades.callback(cog, interaction, User(5555))

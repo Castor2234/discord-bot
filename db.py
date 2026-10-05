@@ -66,12 +66,15 @@ async def init_db():
                 last_daily REAL DEFAULT 0, last_xp REAL DEFAULT 0,
                 last_voice_xp REAL DEFAULT 0,
                 last_transfer REAL DEFAULT 0,
+                last_chaos REAL DEFAULT 0,
                 PRIMARY KEY (guild_id, user_id)
             )""")
         # databases created before voice XP exist without this column
         await _ensure_column(db, "users", "last_voice_xp", "REAL DEFAULT 0")
         # the transfer cooldown is newer than the databases already in the wild
         await _ensure_column(db, "users", "last_transfer", "REAL DEFAULT 0")
+        # /chaosroll came later still, with its own cooldown timestamp
+        await _ensure_column(db, "users", "last_chaos", "REAL DEFAULT 0")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_users_guild_xp"
                          " ON users (guild_id, xp DESC)")
 
@@ -83,8 +86,12 @@ async def init_db():
                 daily_tier INTEGER NOT NULL DEFAULT 0,
                 roll_tier INTEGER NOT NULL DEFAULT 0,
                 transfer_tier INTEGER NOT NULL DEFAULT 0,
+                chaos_tier INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (guild_id, user_id)
             )""")
+        # databases written before /chaosroll was sold have no column for it
+        await _ensure_column(db, "user_upgrades", "chaos_tier",
+                             "INTEGER NOT NULL DEFAULT 0")
 
         await db.execute("""
             CREATE TABLE IF NOT EXISTS shop_items (
@@ -475,6 +482,43 @@ async def gamble(guild_id, user_id, stake, won, reason="roll"):
     return played, row[0]
 
 
+async def chaos_settle(guild_id, user_id, stake, multiplier):
+    """Settle one /chaosroll in ONE statement: the wallet moves by the net.
+
+    `multiplier` is what the draw pays relative to `stake`: 0 loses it, 1 hands
+    it back untouched, N >= 2 pays N * stake in total (a net of stake * (N - 1)
+    - the stake itself is never double counted). Like `gamble`, the member must
+    own at least `stake` coins for the roll to happen at all, checked in the
+    same statement as the balance change so fast repeated calls can never
+    overdraw the wallet. The draw itself is made by the caller.
+
+    Returns (played, balance): played is False (and nothing changed) when the
+    member could not afford the stake; balance is the wallet after the call.
+    A 1x roll changes nothing, but it still counts as played - the cooldown
+    was spent on a real spin, not on a refusal.
+    """
+    if stake <= 0:
+        raise ValueError("stake must be positive")
+    if multiplier < 0:
+        raise ValueError("multiplier must not be negative")
+    delta = stake * (multiplier - 1)
+    async with _connect() as db:
+        await ensure_user(db, guild_id, user_id)
+        cursor = await db.execute(
+            """UPDATE users SET balance = balance + ?
+               WHERE guild_id=? AND user_id=? AND balance >= ?""",
+            (delta, guild_id, user_id, stake))
+        played = cursor.rowcount > 0
+        if played:
+            await _log_tx(db, guild_id, user_id, delta, "chaos")
+        await db.commit()
+        async with db.execute(
+            "SELECT balance FROM users WHERE guild_id=? AND user_id=?",
+            (guild_id, user_id)) as cur:
+            row = await cur.fetchone()
+    return played, row[0]
+
+
 async def claim_daily(guild_id, user_id, amount, cooldown):
     """Pay the daily coins unless the user already claimed them.
 
@@ -535,6 +579,43 @@ async def refund_transfer_cooldown(guild_id, user_id):
         await db.commit()
 
 
+async def spend_chaos_cooldown(guild_id, user_id, cooldown):
+    """Take the /chaosroll cooldown slot unless the member is still on one.
+
+    The timestamp is one conditional statement, so two rolls arriving at the
+    same time cannot both pass. Returns (allowed, seconds_left), exactly like
+    `spend_transfer_cooldown`.
+    """
+    now = time.time()
+    async with _connect() as db:
+        await ensure_user(db, guild_id, user_id)
+        cursor = await db.execute(
+            """UPDATE users SET last_chaos = ?
+               WHERE guild_id=? AND user_id=? AND ? - last_chaos >= ?""",
+            (now, guild_id, user_id, now, cooldown))
+        allowed = cursor.rowcount > 0
+        await db.commit()
+        async with db.execute(
+                "SELECT last_chaos FROM users WHERE guild_id=? AND user_id=?",
+                (guild_id, user_id)) as cur:
+            row = await cur.fetchone()
+    return allowed, max(0.0, cooldown - (now - row[0]))
+
+
+async def refund_chaos_cooldown(guild_id, user_id):
+    """Give the /chaosroll cooldown slot back when the roll did not happen.
+
+    Without this a refused roll (not enough mango for the stake) would still
+    burn the wait, which reads as a bug to the member - the same contract as
+    `refund_transfer_cooldown`.
+    """
+    async with _connect() as db:
+        await db.execute(
+            "UPDATE users SET last_chaos = 0 WHERE guild_id=? AND user_id=?",
+            (guild_id, user_id))
+        await db.commit()
+
+
 # --------------------------------------------------------------------------
 # Upgrades
 #
@@ -544,7 +625,7 @@ async def refund_transfer_cooldown(guild_id, user_id):
 # --------------------------------------------------------------------------
 
 async def get_user_upgrades(guild_id, user_id):
-    """The tiers of one member: {"daily": n, "roll": n, "transfer": n}.
+    """The tiers of one member: {"daily": n, "roll": n, "transfer": n, "chaos": n}.
 
     A member without a row has no upgrades at all, so a missing row means all
     zeros rather than an error. The row is created, because buying needs it.

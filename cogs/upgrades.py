@@ -1,8 +1,9 @@
 """Upgrades cog: the catalogue of coin upgrades and the buttons that buy them.
 
-A member walks up a ladder in three categories - /daily, /roll and /transfer -
-and every tier is defined once in upgrade_levels.py, which the economy cog
-imports too, so the limit a member paid for is exactly the limit they get.
+A member walks up a ladder in four categories - /daily, /roll, /transfer and
+/chaosroll - and every tier is defined once in upgrade_levels.py, which the
+economy cog imports too, so the limit a member paid for is exactly the limit
+they get.
 
 The catalogue is shown with buttons instead of a second command: buying is the
 obvious follow-up to seeing the price, and one embed keeps both in one place.
@@ -30,18 +31,19 @@ from cogs.economy import coins
 # ------------------------------------------------------------------ settings
 UPGRADES_ENABLED = True
 
-# the three ladders, in the order the embed lists them
+# the ladders, in the order the embed lists them
 CATEGORY_LABELS = {
     "daily": "🎁 Ежедневная награда — /daily",
     "roll": "🎲 /roll — ставка",
     "transfer": "💸 /transfer — лимит и перезарядка",
+    "chaos": "🌀 /chaosroll — ставка, шансы и перезарядка",
 }
 
 # user facing texts
 UPGRADES_TITLE = "⬆️ Улучшения"
 UPGRADES_FOOTER = "Твой баланс: {balance} · купить кнопками ниже"
 UPGRADES_DISABLED = "Улучшения отключены."
-UPGRADE_DESCRIPTION = "Улучшить /daily, /roll и /transfer за манго"
+UPGRADE_DESCRIPTION = "Улучшить /daily, /roll, /transfer и /chaosroll за манго"
 USER_UPGRADES_DESCRIPTION = "Показать улучшения участника"
 USER_UPGRADES_MEMBER = "Чьи улучшения показать (по умолчанию — ваши)"
 USER_UPGRADES_TITLE = "⬆️ Улучшения — {member}"

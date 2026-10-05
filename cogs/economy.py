@@ -1,4 +1,5 @@
-"""Economy cog: coins, the daily reward, the shop, /roll and /transfer.
+"""Economy cog: coins, the daily reward, the shop, /roll, /transfer and
+/chaosroll.
 
 Coins live in the users.balance column (see db.py), so the levels cog pays
 into the same wallet that is spent here. Both wallets of a transfer change in
@@ -18,6 +19,7 @@ import upgrade_levels as levels
 from db import (
     add_balance,
     add_shop_item,
+    chaos_settle,
     claim_daily,
     gamble,
     get_recent_purchases,
@@ -27,11 +29,13 @@ from db import (
     get_user_upgrades,
     hide_shop_item,
     purchase_item,
+    refund_chaos_cooldown,
     refund_transfer_cooldown,
     remove_balance,
     restore_shop_item,
     set_purchase_status,
     set_shop_item_price,
+    spend_chaos_cooldown,
     spend_transfer_cooldown,
     transfer as transfer_coins,   # the command is called transfer as well
 )
@@ -71,6 +75,18 @@ TRANSFER_COOLDOWN = 60.0              # seconds between two transfers (free leve
 # a decorator is frozen at import, so it can only hold the shortest cooldown of
 # the ladder; the member's own one is checked inside send_coins
 TRANSFER_COOLDOWN_FASTEST = levels.transfer_cooldown(levels.max_tier("transfer"))
+
+# /chaosroll: the whole ladder is bought - tier 0 may not play at all, tier N
+# sets the largest bet and the seconds between two rolls. The payout chances
+# and the price of every tier live in upgrade_levels.py, so the command only
+# ever asks the catalogue what this member earned.
+CHAOS_ENABLED = True
+CHAOS_DEFAULT_BET = 5
+# the decorator can only freeze the fastest cooldown of the ladder; the real
+# per-tier one is spent inside chaosroll
+CHAOS_COOLDOWN_FASTEST = levels.chaos_cooldown(levels.max_tier("chaos"))
+# the value at the top of the ladder: what a Range can advertise for everybody
+CHAOS_MAX_BET_LIMIT = levels.chaos_max_bet(levels.max_tier("chaos"))
 
 # the free level, kept for the texts and for the tests that pin the defaults
 DAILY_AMOUNT = levels.daily_amount(0)
@@ -129,6 +145,15 @@ TRANSFER_BAD_AMOUNT = "Сумма перевода должна быть от 1 
 TRANSFER_INSUFFICIENT = ("Не хватает ещё {missing} "
                          "(перевод {amount}, баланс {balance}).")
 TRANSFER_NOT_FOR_BOTS = "Ботам нельзя переводить монеты."
+CHAOS_DESCRIPTION = ("Рискни манго: имей шанс на 2x, 3x, 4x, 5x, а также вернуть ставку")
+CHAOS_BET = "Сколько манго поставить"
+CHAOS_LOCKED = ("Улучшение `/chaosroll` не куплено — команда закрыта. "
+                "Смотри `/upgrades`.")
+CHAOS_DISABLED = "Улучшение отключено."
+CHAOS_RETURN = ("🎲 {mention} рискнул {bet} и **вернул ставку**. "
+                "Баланс: {balance}.")
+CHAOS_WIN = ("🎉 {mention} рискнул {bet} и **умножил ×{multiplier}**! "
+             "Выигрыш: {won}. Баланс: {balance}.")
 ROLL_BET_TOO_HIGH = ("Твоя ставка сейчас максимум {limit}. "
                      "Купить повышение: `/upgrades`.")
 TRANSFER_TOO_HIGH = ("Твой лимит перевода сейчас {limit}. "
@@ -201,6 +226,18 @@ class TransferOnCooldown(commands.CommandError):
     def __init__(self, seconds_left: float) -> None:
         self.seconds_left = seconds_left
         super().__init__(f"transfer cooldown, {seconds_left:.0f} s left")
+
+
+class ChaosLocked(commands.CommandError):
+    """Raised when a member has not bought the /chaosroll upgrade yet."""
+
+
+class ChaosOnCooldown(commands.CommandError):
+    """Raised when the member has to wait before rolling chaos again."""
+
+    def __init__(self, seconds_left: float) -> None:
+        self.seconds_left = seconds_left
+        super().__init__(f"chaosroll cooldown, {seconds_left:.0f} s left")
 
 
 class Economy(commands.Cog):
@@ -299,6 +336,67 @@ class Economy(commands.Cog):
         # the decorator can only hold the fastest cooldown, so the real per-tier
         # one is spent inside send_coins
         await self.send_coins(interaction, interaction.user, member, amount)
+
+    # ----------------------------------------------------------- chaosroll
+    @app_commands.command(name="chaosroll", description=CHAOS_DESCRIPTION)
+    @app_commands.guild_only()
+    @app_commands.checks.cooldown(1, CHAOS_COOLDOWN_FASTEST)
+    @app_commands.describe(bet=CHAOS_BET)
+    async def chaosroll(self, interaction: discord.Interaction,
+                        bet: app_commands.Range[int, 1, CHAOS_MAX_BET_LIMIT]
+                        = CHAOS_DEFAULT_BET) -> None:
+        """Risk `bet` mango: multiply them, get the bet back or lose it.
+
+        Every rule comes from the tier this member bought in /upgrades: tier 0
+        may not play at all, tier N sets the ceiling of the bet, the seconds
+        between two rolls and the chances of the draw (upgrade_levels.py).
+        """
+        if not CHAOS_ENABLED:
+            await interaction.response.send_message(CHAOS_DISABLED,
+                                                    ephemeral=True)
+            return
+        tiers = await get_user_upgrades(interaction.guild.id,
+                                        interaction.user.id)
+        tier = tiers["chaos"]
+        if tier == 0:
+            raise ChaosLocked()
+        max_bet = levels.chaos_max_bet(tier)
+        if bet > max_bet:
+            raise BetTooHigh(max_bet, bet)
+        # the decorator can only hold the fastest cooldown, so the real
+        # per-tier one is spent here and given back when the roll is refused
+        allowed, seconds_left = await spend_chaos_cooldown(
+            interaction.guild.id, interaction.user.id,
+            levels.chaos_cooldown(tier))
+        if not allowed:
+            raise ChaosOnCooldown(seconds_left)
+        multiplier = levels.chaos_outcome(tier, _rng.random())
+        played, balance = await chaos_settle(interaction.guild.id,
+                                             interaction.user.id, bet,
+                                             multiplier)
+        if not played:
+            await refund_chaos_cooldown(interaction.guild.id,
+                                        interaction.user.id)
+            raise InsufficientFunds(bet, balance)
+        await interaction.response.send_message(self.chaos_text(
+            interaction.user, bet, multiplier, balance))
+
+    @staticmethod
+    def chaos_text(user, bet: int, multiplier: int, balance: int) -> str:
+        """The answer for one chaosroll draw, in the member's words."""
+        if multiplier == 0:
+            # coins() carries no sign, so the loss amount adds it instead
+            return ROLL_LOSE.format(mention=user.mention, bet=coins(bet),
+                                    lost=f"-{coins(bet)}",
+                                    balance=coins(balance))
+        if multiplier == 1:
+            return CHAOS_RETURN.format(mention=user.mention, bet=coins(bet),
+                                       balance=coins(balance))
+        # the member already owned the bet, so what they win is the net part
+        return CHAOS_WIN.format(mention=user.mention, bet=coins(bet),
+                                multiplier=multiplier,
+                                won=f"+{coins(bet * (multiplier - 1))}",
+                                balance=coins(balance))
 
     # ----------------------------------------------------------------- admin
     @app_commands.command(name="addcoins",
@@ -643,6 +741,11 @@ class Economy(commands.Cog):
         if isinstance(error, TransferOnCooldown):
             return COOLDOWN_MESSAGE.format(
                 seconds=max(1, round(error.seconds_left)))
+        if isinstance(error, ChaosOnCooldown):
+            return COOLDOWN_MESSAGE.format(
+                seconds=max(1, round(error.seconds_left)))
+        if isinstance(error, ChaosLocked):
+            return CHAOS_LOCKED
         # must come before the CheckFailure branch: a cooldown is a CheckFailure
         if isinstance(error, app_commands.CommandOnCooldown):
             return COOLDOWN_MESSAGE.format(
