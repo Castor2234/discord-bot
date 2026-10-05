@@ -37,9 +37,9 @@ CHAOS_CHANCES = (
 # what tier N costs, so PRICES[category][0] buys the move 0 -> 1
 PRICES = {
     "daily": (100, 300, 900),
-    "roll": (300, 600, 1000),
+    "roll": (200, 500, 1000),
     "transfer": (400, 800, 1600),
-    "chaos": (500, 1500, 4000),
+    "chaos": (300, 1000, 3000),
 }
 
 CATEGORIES = ("daily", "roll", "transfer", "chaos")
